@@ -1,0 +1,6 @@
+name: openbika
+processes:
+  dev:
+    command: bun run dev
+    auto_start: true
+    auto_restart: true

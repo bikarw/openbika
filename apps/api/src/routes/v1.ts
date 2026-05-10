@@ -23,6 +23,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { performance } from "node:perf_hooks";
+import slugify from "@sindresorhus/slugify";
 import type { z } from "zod";
 
 import type { ApiBindings } from "../context.js";
@@ -39,6 +40,9 @@ type ApiContext = Context<ApiBindings>;
 
 const branchQueryRowLimit = 500;
 const branchStatementTimeoutMs = 5_000;
+const maxSlugLength = 63;
+const maxProjectSlugAttempts = 25;
+const projectSlugConflictConstraint = "projects_organization_slug_idx";
 const readOnlySqlTokens = new Set(["explain", "select", "show", "with"]);
 const systemSchemas = ["information_schema", "pg_catalog"];
 
@@ -84,6 +88,69 @@ interface SerializableBranch {
 
 function first<T>(rows: T[]): T | undefined {
   return rows[0];
+}
+
+function normalizeSlug(value: string): string {
+  const slug = slugify(value, {
+    decamelize: false,
+    lowercase: true,
+    separator: "-",
+  })
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-")
+    .slice(0, maxSlugLength)
+    .replace(/-+$/g, "");
+
+  if (slug.length >= 2) return slug;
+  return `${slug || "project"}-project`.slice(0, maxSlugLength);
+}
+
+function addSlugSuffix(base: string, suffix: string): string {
+  return `${base.slice(0, maxSlugLength - suffix.length)}${suffix}`;
+}
+
+function pickUniqueSlug(base: string, existingSlugs: Set<string>): string {
+  if (!existingSlugs.has(base)) return base;
+
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = addSlugSuffix(base, `-${index}`);
+    if (!existingSlugs.has(candidate)) return candidate;
+  }
+
+  return addSlugSuffix(base, `-${createId("project").slice(-10)}`);
+}
+
+async function allocateProjectSlug({
+  db,
+  organizationId,
+  requestedSlug,
+}: {
+  db: ControlPlaneDb;
+  organizationId: string;
+  requestedSlug: string;
+}): Promise<string> {
+  const base = normalizeSlug(requestedSlug);
+  const projects = await db
+    .select({ slug: schema.projects.slug })
+    .from(schema.projects)
+    .where(eq(schema.projects.organizationId, organizationId));
+
+  return pickUniqueSlug(
+    base,
+    new Set(projects.map((project) => project.slug)),
+  );
+}
+
+function isProjectSlugConflict(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    "constraint" in error &&
+    error.code === "23505" &&
+    error.constraint === projectSlugConflictConstraint
+  );
 }
 
 function requireUser(c: ApiContext) {
@@ -900,21 +967,37 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       userId: user.id,
     });
 
-    const project = {
-      id: createId("project"),
-      name: input.name,
-      organizationId: input.organizationId,
-      slug: input.slug,
-    };
+    for (let attempt = 0; attempt < maxProjectSlugAttempts; attempt += 1) {
+      const project = {
+        id: createId("project"),
+        name: input.name,
+        organizationId: input.organizationId,
+        slug: await allocateProjectSlug({
+          db,
+          organizationId: input.organizationId,
+          requestedSlug: input.slug,
+        }),
+      };
 
-    await db.insert(schema.projects).values(project);
+      try {
+        await db.insert(schema.projects).values(project);
 
-    return c.json(
-      {
-        project,
-      },
-      201,
-    );
+        return c.json(
+          {
+            project,
+          },
+          201,
+        );
+      } catch (error) {
+        if (!isProjectSlugConflict(error)) {
+          throw error;
+        }
+      }
+    }
+
+    throw new HTTPException(409, {
+      message: "Could not allocate a unique project slug. Please try again.",
+    });
   });
 
   routes.get("/projects/:projectId/databases", async (c) => {
