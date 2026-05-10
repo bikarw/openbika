@@ -1,9 +1,8 @@
 import type {
   OrganizationResponse,
   ProjectResponse,
-  RegionResponse,
 } from "@openbika/contracts";
-import { Button, buttonVariants } from "@openbika/ui/components/button";
+import { Button } from "@openbika/ui/components/button";
 import {
   Card,
   CardContent,
@@ -11,22 +10,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@openbika/ui/components/card";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from "@openbika/ui/components/dropdown-menu";
 import { Input } from "@openbika/ui/components/input";
-import { cn } from "@openbika/ui/lib/utils";
 import {
   ArrowUpRight,
-  ChevronsUpDown,
   Database,
   GitBranch,
   Hash,
-  MapPin,
   Plus,
   X,
 } from "lucide-react";
@@ -36,10 +25,9 @@ export interface ProjectsPanelProps {
   branchCountsByProjectId: Record<string, number>;
   errorMessage: string | null;
   loading: boolean;
-  onCreateProject: (input: { name: string; regionId: string }) => Promise<void>;
+  onCreateProject: (input: { name: string }) => Promise<void>;
   organizations: OrganizationResponse[];
   projects: ProjectResponse[];
-  regions: RegionResponse[];
   selectedOrganizationId: string | null;
 }
 
@@ -50,7 +38,6 @@ export function ProjectsPanel({
   onCreateProject,
   organizations,
   projects,
-  regions,
   selectedOrganizationId,
 }: ProjectsPanelProps) {
   const org = organizations.find((o) => o.id === selectedOrganizationId);
@@ -72,9 +59,8 @@ export function ProjectsPanel({
           </p>
         </div>
         <CreateProjectModal
-          disabled={loading || !selectedOrganizationId || regions.length === 0}
+          disabled={loading || !selectedOrganizationId}
           onCreateProject={onCreateProject}
-          regions={regions}
         />
       </div>
 
@@ -157,34 +143,20 @@ export function ProjectsPanel({
 function CreateProjectModal({
   disabled,
   onCreateProject,
-  regions,
 }: {
   disabled: boolean;
-  onCreateProject: (input: { name: string; regionId: string }) => Promise<void>;
-  regions: RegionResponse[];
+  onCreateProject: (input: { name: string }) => Promise<void>;
 }) {
-  const defaultRegionId =
-    regions.find((region) => region.isDefault)?.id ?? regions[0]?.id ?? "";
   const [open, setOpen] = React.useState(false);
   const [name, setName] = React.useState("");
-  const [regionId, setRegionId] = React.useState(defaultRegionId);
   const [submitting, setSubmitting] = React.useState(false);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
-  const selectedRegion =
-    regions.find((region) => region.id === regionId) ?? regions[0] ?? null;
-
-  React.useEffect(() => {
-    if (!regionId || !regions.some((region) => region.id === regionId)) {
-      setRegionId(defaultRegionId);
-    }
-  }, [defaultRegionId, regionId, regions]);
 
   function closeModal() {
     if (submitting) return;
     setOpen(false);
     setName("");
     setErrorMessage(null);
-    setRegionId(defaultRegionId);
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -196,20 +168,14 @@ function CreateProjectModal({
       return;
     }
 
-    if (!selectedRegion) {
-      setErrorMessage("Choose a region before creating the project.");
-      return;
-    }
-
     setSubmitting(true);
     setErrorMessage(null);
 
     try {
-      await onCreateProject({ name: trimmedName, regionId: selectedRegion.id });
+      await onCreateProject({ name: trimmedName });
       setOpen(false);
       setName("");
       setErrorMessage(null);
-      setRegionId(defaultRegionId);
     } catch (err) {
       setErrorMessage(
         err instanceof Error ? err.message : "Failed to create project",
@@ -247,7 +213,7 @@ function CreateProjectModal({
                   Create project
                 </h2>
                 <p className="text-muted-foreground text-sm">
-                  Name the project and choose where its first database runs.
+                  Name the project and create its first database.
                 </p>
               </div>
               <Button
@@ -274,49 +240,6 @@ function CreateProjectModal({
                   placeholder="Customer analytics"
                   value={name}
                 />
-              </div>
-
-              <div className="space-y-2">
-                <p className="text-sm font-medium">Region</p>
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    className={cn(
-                      buttonVariants({ variant: "outline" }),
-                      "w-full justify-start",
-                    )}
-                    disabled={regions.length === 0 || submitting}
-                  >
-                    <MapPin className="size-4" />
-                    <span className="truncate">
-                      {selectedRegion
-                        ? `${selectedRegion.name} (${selectedRegion.code})`
-                        : "Select region"}
-                    </span>
-                    <ChevronsUpDown className="ml-auto size-4 shrink-0 opacity-60" />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="min-w-72">
-                    <DropdownMenuLabel className="text-muted-foreground text-xs">
-                      Regions
-                    </DropdownMenuLabel>
-                    {regions.map((region) => (
-                      <DropdownMenuItem
-                        className="gap-2 p-2"
-                        key={region.id}
-                        onClick={() => setRegionId(region.id)}
-                      >
-                        <MapPin className="size-4 opacity-70" />
-                        <div className="flex min-w-0 flex-col">
-                          <span className="truncate font-medium">
-                            {region.name}
-                          </span>
-                          <span className="truncate text-muted-foreground text-xs">
-                            {region.provider.name} · {region.code}
-                          </span>
-                        </div>
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
               </div>
 
               {errorMessage ? (

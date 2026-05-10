@@ -179,27 +179,6 @@ export const providers = pgTable(
   }),
 );
 
-export const regions = pgTable(
-  "regions",
-  {
-    id: text("id").primaryKey(),
-    providerId: text("provider_id")
-      .notNull()
-      .references(() => providers.id, { onDelete: "restrict" }),
-    code: text("code").notNull(),
-    name: text("name").notNull(),
-    countryCode: text("country_code").notNull().default("RW"),
-    isDefault: boolean("is_default").notNull().default(false),
-    ...timestamps,
-  },
-  (table) => ({
-    providerCodeIdx: uniqueIndex("regions_provider_code_idx").on(
-      table.providerId,
-      table.code,
-    ),
-  }),
-);
-
 export const projects = pgTable(
   "projects",
   {
@@ -226,9 +205,6 @@ export const databaseClusters = pgTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
-    regionId: text("region_id")
-      .notNull()
-      .references(() => regions.id, { onDelete: "restrict" }),
     name: text("name").notNull(),
     plan: planKind("plan").notNull(),
     status: clusterStatus("status").notNull().default("requested"),

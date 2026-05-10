@@ -55,7 +55,6 @@ CREATE TABLE "branches" (
 CREATE TABLE "database_clusters" (
 	"id" text PRIMARY KEY NOT NULL,
 	"project_id" text NOT NULL,
-	"region_id" text NOT NULL,
 	"name" text NOT NULL,
 	"plan" "plan_kind" NOT NULL,
 	"status" "cluster_status" DEFAULT 'requested' NOT NULL,
@@ -112,17 +111,6 @@ CREATE TABLE "providers" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "regions" (
-	"id" text PRIMARY KEY NOT NULL,
-	"provider_id" text NOT NULL,
-	"code" text NOT NULL,
-	"name" text NOT NULL,
-	"country_code" text DEFAULT 'RW' NOT NULL,
-	"is_default" boolean DEFAULT false NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
-);
---> statement-breakpoint
 CREATE TABLE "restore_jobs" (
 	"id" text PRIMARY KEY NOT NULL,
 	"backup_job_id" text NOT NULL,
@@ -173,13 +161,11 @@ ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_actor_user_id_users_id_f
 ALTER TABLE "backup_jobs" ADD CONSTRAINT "backup_jobs_cluster_id_database_clusters_id_fk" FOREIGN KEY ("cluster_id") REFERENCES "public"."database_clusters"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "branches" ADD CONSTRAINT "branches_cluster_id_database_clusters_id_fk" FOREIGN KEY ("cluster_id") REFERENCES "public"."database_clusters"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "database_clusters" ADD CONSTRAINT "database_clusters_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "database_clusters" ADD CONSTRAINT "database_clusters_region_id_regions_id_fk" FOREIGN KEY ("region_id") REFERENCES "public"."regions"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "endpoints" ADD CONSTRAINT "endpoints_cluster_id_database_clusters_id_fk" FOREIGN KEY ("cluster_id") REFERENCES "public"."database_clusters"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "endpoints" ADD CONSTRAINT "endpoints_branch_id_branches_id_fk" FOREIGN KEY ("branch_id") REFERENCES "public"."branches"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "memberships" ADD CONSTRAINT "memberships_organization_id_organizations_id_fk" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "memberships" ADD CONSTRAINT "memberships_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "projects" ADD CONSTRAINT "projects_organization_id_organizations_id_fk" FOREIGN KEY ("organization_id") REFERENCES "public"."organizations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "regions" ADD CONSTRAINT "regions_provider_id_providers_id_fk" FOREIGN KEY ("provider_id") REFERENCES "public"."providers"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "restore_jobs" ADD CONSTRAINT "restore_jobs_backup_job_id_backup_jobs_id_fk" FOREIGN KEY ("backup_job_id") REFERENCES "public"."backup_jobs"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "restore_jobs" ADD CONSTRAINT "restore_jobs_target_branch_id_branches_id_fk" FOREIGN KEY ("target_branch_id") REFERENCES "public"."branches"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "sessions" ADD CONSTRAINT "sessions_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -194,7 +180,6 @@ CREATE UNIQUE INDEX "memberships_organization_user_idx" ON "memberships" USING b
 CREATE UNIQUE INDEX "organizations_slug_idx" ON "organizations" USING btree ("slug");--> statement-breakpoint
 CREATE UNIQUE INDEX "projects_organization_slug_idx" ON "projects" USING btree ("organization_id","slug");--> statement-breakpoint
 CREATE UNIQUE INDEX "providers_kind_idx" ON "providers" USING btree ("kind");--> statement-breakpoint
-CREATE UNIQUE INDEX "regions_provider_code_idx" ON "regions" USING btree ("provider_id","code");--> statement-breakpoint
 CREATE INDEX "restore_jobs_status_idx" ON "restore_jobs" USING btree ("status");--> statement-breakpoint
 CREATE INDEX "sessions_user_id_idx" ON "sessions" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "verifications_identifier_idx" ON "verifications" USING btree ("identifier");

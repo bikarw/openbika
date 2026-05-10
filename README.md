@@ -83,12 +83,6 @@ curl -i -c /tmp/openbika.cookies \
   http://localhost:8787/api/auth/sign-up/email
 ```
 
-List regions. The local dev region is `region_local_rw1`.
-
-```sh
-curl -b /tmp/openbika.cookies http://localhost:8787/v1/regions
-```
-
 Create an organization, project, and managed Postgres database:
 
 ```sh
@@ -108,7 +102,7 @@ curl -b /tmp/openbika.cookies \
 ```sh
 curl -b /tmp/openbika.cookies \
   -H "Content-Type: application/json" \
-  -d '{"name":"app-db","regionId":"region_local_rw1","plan":"developer","postgresVersion":"18"}' \
+  -d '{"name":"app-db","plan":"developer","postgresVersion":"18"}' \
   http://localhost:8787/v1/projects/PROJECT_ID_FROM_PREVIOUS_RESPONSE/databases
 ```
 

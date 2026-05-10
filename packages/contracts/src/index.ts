@@ -67,16 +67,6 @@ export const providerResponseSchema = z.object({
 });
 export type ProviderResponse = z.infer<typeof providerResponseSchema>;
 
-export const regionResponseSchema = z.object({
-  id: idSchema,
-  code: z.string(),
-  countryCode: z.string(),
-  isDefault: z.boolean(),
-  name: z.string(),
-  provider: providerResponseSchema,
-});
-export type RegionResponse = z.infer<typeof regionResponseSchema>;
-
 export const createOrganizationRequestSchema = z.object({
   name: z.string().min(1).max(120),
   slug: slugSchema,
@@ -202,7 +192,6 @@ export const databaseResponseSchema = z.object({
   plan: planKindSchema,
   postgresVersion: z.string(),
   projectId: idSchema,
-  regionId: idSchema,
   status: clusterStatusSchema,
 });
 export type DatabaseResponse = z.infer<typeof databaseResponseSchema>;
@@ -211,7 +200,6 @@ export const createDatabaseRequestSchema = z.object({
   name: z.string().min(1).max(63),
   plan: planKindSchema.default("developer"),
   postgresVersion: z.string().default("18"),
-  regionId: idSchema,
 });
 export type CreateDatabaseRequest = z.infer<typeof createDatabaseRequestSchema>;
 
@@ -253,7 +241,6 @@ export type RestoreJobResponse = z.infer<typeof restoreJobResponseSchema>;
 export const provisionClusterInputSchema = z.object({
   clusterId: idSchema,
   projectId: idSchema,
-  regionId: idSchema,
   provider: providerKindSchema,
   plan: planKindSchema,
   postgresVersion: z.string().default("18"),

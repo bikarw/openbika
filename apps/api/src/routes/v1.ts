@@ -12,7 +12,6 @@ import {
   type BranchResponse,
   type BranchSchemaTableResponse,
   type DatabaseResponse,
-  type RegionResponse,
 } from "@openbika/contracts";
 import { createPool, schema } from "@openbika/db";
 import type { ControlPlaneDb } from "@openbika/db";
@@ -35,51 +34,6 @@ import {
 interface CreateV1RoutesOptions {
   env: ApiEnv;
 }
-
-const defaultProviders = [
-  {
-    id: "provider_local",
-    kind: "local",
-    name: "Local Development",
-  },
-  {
-    id: "provider_strettch",
-    kind: "strettch",
-    name: "Strettch Cloud",
-  },
-  {
-    id: "provider_aos",
-    kind: "aos",
-    name: "AOS",
-  },
-] as const;
-
-const defaultRegions = [
-  {
-    code: "local-rw1",
-    countryCode: "RW",
-    id: "region_local_rw1",
-    isDefault: true,
-    name: "Local Rwanda Dev",
-    providerId: "provider_local",
-  },
-  {
-    code: "rw-kigali-1",
-    countryCode: "RW",
-    id: "region_strettch_rw1",
-    isDefault: false,
-    name: "Rwanda - Kigali",
-    providerId: "provider_strettch",
-  },
-  {
-    code: "rw-aos-1",
-    countryCode: "RW",
-    id: "region_aos_rw1",
-    isDefault: false,
-    name: "Rwanda - AOS",
-    providerId: "provider_aos",
-  },
-] as const;
 
 type ApiContext = Context<ApiBindings>;
 
@@ -165,24 +119,6 @@ async function parseJson<TSchema extends z.ZodType>(
   }
 
   return result.data;
-}
-
-async function ensureDefaultRegions(db: ControlPlaneDb): Promise<void> {
-  for (const provider of defaultProviders) {
-    await db
-      .insert(schema.providers)
-      .values({
-        config: {},
-        id: provider.id,
-        kind: provider.kind,
-        name: provider.name,
-      })
-      .onConflictDoNothing();
-  }
-
-  for (const region of defaultRegions) {
-    await db.insert(schema.regions).values(region).onConflictDoNothing();
-  }
 }
 
 async function assertOrganizationAccess({
@@ -831,7 +767,6 @@ async function serializeDatabase(
     plan: database.plan,
     postgresVersion: database.postgresVersion,
     projectId: database.projectId,
-    regionId: database.regionId,
     status: database.status,
   };
 }
@@ -853,43 +788,6 @@ function serializeNullableDate(date: Date | null): string | null {
 
 export function createV1Routes({ env }: CreateV1RoutesOptions) {
   const routes = new Hono<ApiBindings>();
-
-  routes.get("/regions", async (c) => {
-    const db = c.get("db");
-    await ensureDefaultRegions(db);
-
-    const providers = await db.select().from(schema.providers);
-    const regions = await db.select().from(schema.regions);
-    const providerById = new Map(
-      providers.map((provider) => [provider.id, provider]),
-    );
-    const response: RegionResponse[] = regions.flatMap((region) => {
-      const provider = providerById.get(region.providerId);
-
-      if (!provider) {
-        return [];
-      }
-
-      return [
-        {
-          code: region.code,
-          countryCode: region.countryCode,
-          id: region.id,
-          isDefault: region.isDefault,
-          name: region.name,
-          provider: {
-            id: provider.id,
-            kind: provider.kind,
-            name: provider.name,
-          },
-        },
-      ];
-    });
-
-    return c.json({
-      regions: response,
-    });
-  });
 
   routes.get("/organizations", async (c) => {
     const user = requireUser(c);
@@ -1049,43 +947,12 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       userId: user.id,
     });
 
-    await ensureDefaultRegions(db);
-
-    const region = first(
-      await db
-        .select()
-        .from(schema.regions)
-        .where(eq(schema.regions.id, input.regionId))
-        .limit(1),
-    );
-
-    if (!region) {
-      throw new HTTPException(400, {
-        message: "Region is not available",
-      });
-    }
-
-    const provider = first(
-      await db
-        .select()
-        .from(schema.providers)
-        .where(eq(schema.providers.id, region.providerId))
-        .limit(1),
-    );
-
-    if (!provider) {
-      throw new HTTPException(400, {
-        message: "Region provider is not available",
-      });
-    }
-
     const database = {
       id: createId("database_cluster"),
       name: input.name,
       plan: input.plan,
       postgresVersion: input.postgresVersion,
       projectId: project.id,
-      regionId: input.regionId,
       status: "requested" as const,
     };
 
@@ -1110,8 +977,7 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
           plan: database.plan,
           postgresVersion: database.postgresVersion,
           projectId: database.projectId,
-          provider: provider.kind,
-          regionId: database.regionId,
+          provider: "local",
         },
         workflowId: `provision-${database.id}`,
       });
@@ -1340,34 +1206,6 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
     await db.insert(schema.branches).values(branch);
 
     if (parentBranch) {
-      const region = first(
-        await db
-          .select()
-          .from(schema.regions)
-          .where(eq(schema.regions.id, database.regionId))
-          .limit(1),
-      );
-
-      if (!region) {
-        throw new HTTPException(400, {
-          message: "Database region is not available",
-        });
-      }
-
-      const provider = first(
-        await db
-          .select()
-          .from(schema.providers)
-          .where(eq(schema.providers.id, region.providerId))
-          .limit(1),
-      );
-
-      if (!provider) {
-        throw new HTTPException(400, {
-          message: "Database provider is not available",
-        });
-      }
-
       try {
         await startControlPlaneWorkflow({
           env,
@@ -1375,7 +1213,7 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
           payload: {
             clusterId: database.id,
             copyMode: branch.copyMode,
-            provider: provider.kind,
+            provider: "local",
             sourceBranchId: parentBranch.id,
             targetBranchId: branch.id,
           },

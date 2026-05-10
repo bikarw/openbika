@@ -23,8 +23,6 @@ import {
   organizationResponseSchema,
   type ProjectResponse,
   projectResponseSchema,
-  type RegionResponse,
-  regionResponseSchema,
   type RestoreJobResponse,
   restoreJobResponseSchema,
 } from "@openbika/contracts";
@@ -121,14 +119,6 @@ export class OpenbikaClient {
     return this.request({
       parse: (body) => parseUser(readProperty(body, "user")),
       path: "/v1/me",
-    });
-  }
-
-  async listRegions(): Promise<RegionResponse[]> {
-    return this.request({
-      parse: (body) =>
-        regionResponseSchema.array().parse(readProperty(body, "regions")),
-      path: "/v1/regions",
     });
   }
 

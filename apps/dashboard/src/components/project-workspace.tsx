@@ -1091,9 +1091,8 @@ function ProjectDashboard({
                   <Badge variant="outline">{database.status}</Badge>
                 </div>
               </CardHeader>
-              <CardContent className="grid gap-3 sm:grid-cols-3">
+              <CardContent className="grid gap-3 sm:grid-cols-2">
                 <MetadataItem label="Plan" value={database.plan} />
-                <MetadataItem label="Region" value={database.regionId} />
                 <MetadataItem
                   label="Endpoint"
                   value={database.endpoint?.hostname ?? "Not available"}

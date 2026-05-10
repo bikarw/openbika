@@ -3,11 +3,7 @@ import {
   useNavigate,
   useRouter,
 } from "@tanstack/react-router";
-import type {
-  OrganizationResponse,
-  ProjectResponse,
-  RegionResponse,
-} from "@openbika/contracts";
+import type { OrganizationResponse, ProjectResponse } from "@openbika/contracts";
 import * as React from "react";
 
 import { authClient } from "#/auth-client";
@@ -77,7 +73,6 @@ function ProjectsRoutePage() {
   const [projectBranchCounts, setProjectBranchCounts] = React.useState<
     Record<string, number>
   >({});
-  const [regions, setRegions] = React.useState<RegionResponse[]>([]);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [pending, setPending] = React.useState(true);
   const [healthStatus, setHealthStatus] = React.useState<
@@ -95,7 +90,6 @@ function ProjectsRoutePage() {
       setPending(true);
       setLoadError(null);
       setProjectBranchCounts({});
-      setRegions([]);
       setHealthStatus("loading");
 
       try {
@@ -129,9 +123,8 @@ function ProjectsRoutePage() {
 
         writeStoredOrganizationId(active.id);
 
-        const [projList, regionList, healthy] = await Promise.all([
+        const [projList, healthy] = await Promise.all([
           client.listProjects({ organizationId: active.id }),
-          client.listRegions(),
           healthPromise,
         ]);
         if (cancelled) return;
@@ -151,7 +144,6 @@ function ProjectsRoutePage() {
 
         setOrganizations(orgs);
         setProjects(projList);
-        setRegions(regionList);
         setProjectBranchCounts(Object.fromEntries(branchCountEntries));
         setHealthStatus(healthy ? "ok" : "error");
       } catch (err) {
@@ -161,7 +153,6 @@ function ProjectsRoutePage() {
         );
         setProjects([]);
         setProjectBranchCounts({});
-        setRegions([]);
         setHealthStatus("error");
       } finally {
         if (!cancelled) setPending(false);
@@ -185,10 +176,7 @@ function ProjectsRoutePage() {
     });
   }
 
-  async function handleCreateProject(input: {
-    name: string;
-    regionId: string;
-  }) {
+  async function handleCreateProject(input: { name: string }) {
     if (!selectedOrganizationId) {
       throw new Error("Select an organization before creating a project.");
     }
@@ -203,7 +191,6 @@ function ProjectsRoutePage() {
 
     await client.createDatabase(project.id, {
       name: slug,
-      regionId: input.regionId,
     });
 
     await navigate({
@@ -238,7 +225,6 @@ function ProjectsRoutePage() {
         loading={pending}
         organizations={organizations}
         projects={projects}
-        regions={regions}
         onCreateProject={handleCreateProject}
         selectedOrganizationId={selectedOrganizationId}
       />

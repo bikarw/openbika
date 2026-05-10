@@ -5,7 +5,6 @@ import type {
   BranchStatus,
   ClusterStatus,
   PlanKind,
-  ProviderKind,
 } from "@openbika/contracts";
 
 export type EntityPrefix =
@@ -58,18 +57,9 @@ export interface ProjectRef {
   name: string;
 }
 
-export interface RegionRef {
-  id: string;
-  provider: ProviderKind;
-  code: string;
-  name: string;
-  countryCode: string;
-}
-
 export interface DatabaseClusterRef {
   id: string;
   projectId: string;
-  regionId: string;
   name: string;
   plan: PlanKind;
   status: ClusterStatus;
