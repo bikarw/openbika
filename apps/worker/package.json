@@ -1,0 +1,28 @@
+{
+  "name": "@openbika/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check-types": "tsc -p tsconfig.json --noEmit",
+    "dev": "bun run --env-file=../../.env --watch src/worker.ts",
+    "lint": "eslint . --max-warnings 0"
+  },
+  "dependencies": {
+    "@temporalio/activity": "^1.17.0",
+    "@temporalio/worker": "^1.17.0",
+    "@temporalio/workflow": "^1.17.0",
+    "@openbika/contracts": "workspace:*",
+    "@openbika/db": "workspace:*",
+    "@openbika/domain": "workspace:*",
+    "@openbika/env": "workspace:*",
+    "@openbika/observability": "workspace:*",
+    "@openbika/provisioning": "workspace:*",
+    "@openbika/queue": "workspace:*",
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "@repo/typescript-config": "workspace:*"
+  }
+}

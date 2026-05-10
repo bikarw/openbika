@@ -1,0 +1,15 @@
+{
+  "extends": "@repo/typescript-config/base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "composite": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "paths": {
+      "@openbika/db": ["../db/src/index.ts"],
+      "@openbika/domain": ["../domain/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "references": [{ "path": "../db" }, { "path": "../domain" }]
+}

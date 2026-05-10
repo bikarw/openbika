@@ -1,0 +1,1575 @@
+import {
+  branchConnectionResponseSchema,
+  branchQueryResponseSchema,
+  branchSchemaResponseSchema,
+  createBranchRequestSchema,
+  createDatabaseRequestSchema,
+  createOrganizationRequestSchema,
+  createProjectRequestSchema,
+  createRestoreRequestSchema,
+  executeBranchQueryRequestSchema,
+  type BranchExpirationTtl,
+  type BranchResponse,
+  type BranchSchemaTableResponse,
+  type DatabaseResponse,
+  type RegionResponse,
+} from "@openbika/contracts";
+import { createPool, schema } from "@openbika/db";
+import type { ControlPlaneDb } from "@openbika/db";
+import { createId } from "@openbika/domain";
+import type { ApiEnv } from "@openbika/env";
+import { workflowNames } from "@openbika/queue";
+import { and, eq, lte } from "drizzle-orm";
+import { Hono } from "hono";
+import type { Context } from "hono";
+import { HTTPException } from "hono/http-exception";
+import { performance } from "node:perf_hooks";
+import type { z } from "zod";
+
+import type { ApiBindings } from "../context.js";
+import {
+  startControlPlaneWorkflow,
+  WorkflowDispatchError,
+} from "../workflows.js";
+
+interface CreateV1RoutesOptions {
+  env: ApiEnv;
+}
+
+const defaultProviders = [
+  {
+    id: "provider_local",
+    kind: "local",
+    name: "Local Development",
+  },
+  {
+    id: "provider_strettch",
+    kind: "strettch",
+    name: "Strettch Cloud",
+  },
+  {
+    id: "provider_aos",
+    kind: "aos",
+    name: "AOS",
+  },
+] as const;
+
+const defaultRegions = [
+  {
+    code: "local-rw1",
+    countryCode: "RW",
+    id: "region_local_rw1",
+    isDefault: true,
+    name: "Local Rwanda Dev",
+    providerId: "provider_local",
+  },
+  {
+    code: "rw-kigali-1",
+    countryCode: "RW",
+    id: "region_strettch_rw1",
+    isDefault: false,
+    name: "Rwanda - Kigali",
+    providerId: "provider_strettch",
+  },
+  {
+    code: "rw-aos-1",
+    countryCode: "RW",
+    id: "region_aos_rw1",
+    isDefault: false,
+    name: "Rwanda - AOS",
+    providerId: "provider_aos",
+  },
+] as const;
+
+type ApiContext = Context<ApiBindings>;
+
+const branchQueryRowLimit = 500;
+const branchStatementTimeoutMs = 5_000;
+const readOnlySqlTokens = new Set(["explain", "select", "show", "with"]);
+const systemSchemas = ["information_schema", "pg_catalog"];
+
+interface BranchConnectionDetails {
+  connectionString: string;
+  databaseName: string;
+  username: string;
+}
+
+interface BranchSchemaRow {
+  columnName: string;
+  dataType: string;
+  defaultValue: string | null;
+  estimatedRows: number | string | null;
+  isNullable: boolean;
+  isPrimaryKey: boolean;
+  ordinalPosition: number;
+  schema: string;
+  tableName: string;
+  tableType: string;
+}
+
+interface QueryField {
+  dataTypeID: number;
+  name: string;
+}
+
+interface QueryExecutionResult {
+  command: string;
+  fields: QueryField[];
+  rowCount: number | null;
+  rows: Record<string, unknown>[];
+}
+
+interface SerializableBranch {
+  copyMode: (typeof schema.branches.$inferSelect)["copyMode"];
+  expiresAt: Date | null;
+  id: string;
+  name: string;
+  parentBranchId: string | null;
+  status: (typeof schema.branches.$inferSelect)["status"];
+}
+
+function first<T>(rows: T[]): T | undefined {
+  return rows[0];
+}
+
+function requireUser(c: ApiContext) {
+  const user = c.get("user");
+
+  if (!user) {
+    throw new HTTPException(401, {
+      message: "Authentication required",
+    });
+  }
+
+  return user;
+}
+
+async function parseJson<TSchema extends z.ZodType>(
+  c: ApiContext,
+  schemaToParse: TSchema,
+): Promise<z.infer<TSchema>> {
+  const body = await c.req.json().catch(() => {
+    throw new HTTPException(400, {
+      message: "Request body must be valid JSON",
+    });
+  });
+
+  const result = schemaToParse.safeParse(body);
+
+  if (!result.success) {
+    throw new HTTPException(400, {
+      message: result.error.issues
+        .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+        .join("; "),
+    });
+  }
+
+  return result.data;
+}
+
+async function ensureDefaultRegions(db: ControlPlaneDb): Promise<void> {
+  for (const provider of defaultProviders) {
+    await db
+      .insert(schema.providers)
+      .values({
+        config: {},
+        id: provider.id,
+        kind: provider.kind,
+        name: provider.name,
+      })
+      .onConflictDoNothing();
+  }
+
+  for (const region of defaultRegions) {
+    await db.insert(schema.regions).values(region).onConflictDoNothing();
+  }
+}
+
+async function assertOrganizationAccess({
+  db,
+  organizationId,
+  requireManager = false,
+  userId,
+}: {
+  db: ControlPlaneDb;
+  organizationId: string;
+  requireManager?: boolean;
+  userId: string;
+}) {
+  const membership = first(
+    await db
+      .select()
+      .from(schema.memberships)
+      .where(
+        and(
+          eq(schema.memberships.organizationId, organizationId),
+          eq(schema.memberships.userId, userId),
+        ),
+      )
+      .limit(1),
+  );
+
+  if (!membership) {
+    throw new HTTPException(404, {
+      message: "Organization not found",
+    });
+  }
+
+  if (
+    requireManager &&
+    membership.role !== "owner" &&
+    membership.role !== "admin"
+  ) {
+    throw new HTTPException(403, {
+      message: "Organization manager access required",
+    });
+  }
+
+  return membership;
+}
+
+async function assertProjectAccess({
+  db,
+  projectId,
+  userId,
+}: {
+  db: ControlPlaneDb;
+  projectId: string;
+  userId: string;
+}) {
+  const project = first(
+    await db
+      .select()
+      .from(schema.projects)
+      .where(eq(schema.projects.id, projectId))
+      .limit(1),
+  );
+
+  if (!project) {
+    throw new HTTPException(404, {
+      message: "Project not found",
+    });
+  }
+
+  await assertOrganizationAccess({
+    db,
+    organizationId: project.organizationId,
+    userId,
+  });
+
+  return project;
+}
+
+async function assertDatabaseAccess({
+  databaseId,
+  db,
+  userId,
+}: {
+  databaseId: string;
+  db: ControlPlaneDb;
+  userId: string;
+}) {
+  const database = first(
+    await db
+      .select()
+      .from(schema.databaseClusters)
+      .where(eq(schema.databaseClusters.id, databaseId))
+      .limit(1),
+  );
+
+  if (!database) {
+    throw new HTTPException(404, {
+      message: "Database not found",
+    });
+  }
+
+  await assertProjectAccess({
+    db,
+    projectId: database.projectId,
+    userId,
+  });
+
+  return database;
+}
+
+async function deleteExpiredBranchesForDatabase({
+  databaseId,
+  db,
+}: {
+  databaseId: string;
+  db: ControlPlaneDb;
+}) {
+  await db
+    .delete(schema.branches)
+    .where(
+      and(
+        eq(schema.branches.clusterId, databaseId),
+        lte(schema.branches.expiresAt, new Date()),
+      ),
+    );
+}
+
+async function assertBranchAccess({
+  branchId,
+  db,
+  userId,
+}: {
+  branchId: string;
+  db: ControlPlaneDb;
+  userId: string;
+}) {
+  const branch = first(
+    await db
+      .select()
+      .from(schema.branches)
+      .where(eq(schema.branches.id, branchId))
+      .limit(1),
+  );
+
+  if (!branch) {
+    throw new HTTPException(404, {
+      message: "Branch not found",
+    });
+  }
+
+  if (branch.expiresAt && branch.expiresAt <= new Date()) {
+    await db.delete(schema.branches).where(eq(schema.branches.id, branch.id));
+
+    throw new HTTPException(404, {
+      message: "Branch has expired",
+    });
+  }
+
+  const database = await assertDatabaseAccess({
+    databaseId: branch.clusterId,
+    db,
+    userId,
+  });
+
+  return { branch, database };
+}
+
+async function loadBranchEndpoint({
+  branch,
+  database,
+  db,
+}: {
+  branch: typeof schema.branches.$inferSelect;
+  database: typeof schema.databaseClusters.$inferSelect;
+  db: ControlPlaneDb;
+}) {
+  const endpoint = first(
+    await db
+      .select()
+      .from(schema.endpoints)
+      .where(
+        and(
+          eq(schema.endpoints.clusterId, database.id),
+          eq(schema.endpoints.branchId, branch.id),
+        ),
+      )
+      .limit(1),
+  );
+
+  return (
+    endpoint ??
+    first(
+      await db
+        .select()
+        .from(schema.endpoints)
+        .where(eq(schema.endpoints.clusterId, database.id))
+        .limit(1),
+    )
+  );
+}
+
+function branchExpirationFromTtl(ttl: BranchExpirationTtl | undefined) {
+  if (!ttl) return null;
+
+  const expiresAt = new Date();
+
+  switch (ttl) {
+    case "1h":
+      expiresAt.setHours(expiresAt.getHours() + 1);
+      return expiresAt;
+    case "1d":
+      expiresAt.setDate(expiresAt.getDate() + 1);
+      return expiresAt;
+    case "7d":
+      expiresAt.setDate(expiresAt.getDate() + 7);
+      return expiresAt;
+    default: {
+      const exhaustive: never = ttl;
+      return exhaustive;
+    }
+  }
+}
+
+function buildBranchConnectionString({
+  databaseName,
+  endpoint,
+  password,
+  revealPassword,
+  username,
+}: {
+  databaseName: string;
+  endpoint: typeof schema.endpoints.$inferSelect;
+  password: string;
+  revealPassword: boolean;
+  username: string;
+}) {
+  const renderedPassword = revealPassword ? password : "********";
+  const hostname = isLocalEndpointHostname(endpoint.hostname)
+    ? "localhost"
+    : endpoint.hostname;
+  const authority = `${encodeURIComponent(username)}:${encodeURIComponent(
+    renderedPassword,
+  )}@${hostname}:${endpoint.port}`;
+
+  return `postgresql://${authority}/${encodeURIComponent(databaseName)}`;
+}
+
+function localBranchDatabaseName(branchId: string) {
+  return `openbika_${localBranchToken(branchId)}`;
+}
+
+function localBranchToken(branchId: string) {
+  return branchId
+    .replace(/^br_/, "")
+    .replaceAll("-", "")
+    .slice(-12)
+    .toLowerCase();
+}
+
+function legacyLocalBranchDatabaseName(branchId: string) {
+  const token = branchId
+    .replace(/^br_/, "")
+    .replaceAll("-", "")
+    .slice(0, 12)
+    .toLowerCase();
+
+  return `openbika_${token}`;
+}
+
+function localBranchDatabaseNameCandidates(branchId: string) {
+  const preferred = localBranchDatabaseName(branchId);
+  const legacy = legacyLocalBranchDatabaseName(branchId);
+
+  return preferred === legacy ? [preferred] : [preferred, legacy];
+}
+
+function quoteIdentifier(value: string) {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+function quoteLiteral(value: string) {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function isLocalEndpointHostname(hostname: string) {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname.endsWith(".local.openbika.test")
+  );
+}
+
+async function ensureLocalBranchDatabase({
+  branch,
+  connectionString,
+}: {
+  branch: typeof schema.branches.$inferSelect;
+  connectionString: string;
+}) {
+  const databaseName = localBranchDatabaseName(branch.id);
+  const token = localBranchToken(branch.id);
+  const username = `${databaseName}_owner`;
+  const password = `bpg_${token}`;
+  const pool = createPool(connectionString);
+  const client = await pool.connect();
+
+  try {
+    for (const candidate of localBranchDatabaseNameCandidates(branch.id)) {
+      const existingDatabase = await client.query<{ exists: boolean }>(
+        "select exists(select 1 from pg_database where datname = $1)",
+        [candidate],
+      );
+
+      if (existingDatabase.rows[0]?.exists) {
+        const candidateToken = candidate.replace(/^openbika_/, "");
+        const candidateUsername = `${candidate}_owner`;
+
+        return {
+          databaseName: candidate,
+          password: `bpg_${candidateToken}`,
+          username: candidateUsername,
+        };
+      }
+    }
+
+    const roleExists = await client.query<{ exists: boolean }>(
+      "select exists(select 1 from pg_roles where rolname = $1)",
+      [username],
+    );
+
+    if (!roleExists.rows[0]?.exists) {
+      await client.query(
+        `create role ${quoteIdentifier(username)} login password ${quoteLiteral(
+          password,
+        )}`,
+      );
+    } else {
+      await client.query(
+        `alter role ${quoteIdentifier(username)} login password ${quoteLiteral(
+          password,
+        )}`,
+      );
+    }
+
+    const databaseExists = await client.query<{ exists: boolean }>(
+      "select exists(select 1 from pg_database where datname = $1)",
+      [databaseName],
+    );
+
+    if (!databaseExists.rows[0]?.exists) {
+      await client.query(
+        `create database ${quoteIdentifier(databaseName)} owner ${quoteIdentifier(
+          username,
+        )}`,
+      );
+    }
+  } finally {
+    client.release();
+    await pool.end();
+  }
+
+  return {
+    databaseName,
+    password,
+    username,
+  };
+}
+
+async function resolveBranchConnectionDetails({
+  branch,
+  controlDatabaseUrl,
+  database,
+  endpoint,
+}: {
+  branch: typeof schema.branches.$inferSelect;
+  controlDatabaseUrl: string;
+  database: typeof schema.databaseClusters.$inferSelect;
+  endpoint: typeof schema.endpoints.$inferSelect;
+}) {
+  if (isLocalEndpointHostname(endpoint.hostname)) {
+    return ensureLocalBranchDatabase({
+      branch,
+      connectionString: controlDatabaseUrl,
+    });
+  }
+
+  return {
+    databaseName: database.name,
+    password: `openbika_${branch.id}`,
+    username: "postgres",
+  };
+}
+
+async function resolveBranchRuntimeConnection({
+  branch,
+  controlDatabaseUrl,
+  database,
+  endpoint,
+}: {
+  branch: typeof schema.branches.$inferSelect;
+  controlDatabaseUrl: string;
+  database: typeof schema.databaseClusters.$inferSelect;
+  endpoint: typeof schema.endpoints.$inferSelect;
+}): Promise<BranchConnectionDetails> {
+  const connectionDetails = await resolveBranchConnectionDetails({
+    branch,
+    controlDatabaseUrl,
+    database,
+    endpoint,
+  });
+
+  return {
+    connectionString: buildBranchConnectionString({
+      databaseName: connectionDetails.databaseName,
+      endpoint,
+      password: connectionDetails.password,
+      revealPassword: true,
+      username: connectionDetails.username,
+    }),
+    databaseName: connectionDetails.databaseName,
+    username: connectionDetails.username,
+  };
+}
+
+async function loadBranchSchema({
+  branchId,
+  connectionString,
+}: {
+  branchId: string;
+  connectionString: string;
+}) {
+  const pool = createPool(connectionString);
+
+  try {
+    const result = await pool.query<BranchSchemaRow>(
+      `
+        select
+          c.table_schema as "schema",
+          c.table_name as "tableName",
+          t.table_type as "tableType",
+          c.column_name as "columnName",
+          c.ordinal_position as "ordinalPosition",
+          coalesce(format_type(a.atttypid, a.atttypmod), c.data_type) as "dataType",
+          c.is_nullable = 'YES' as "isNullable",
+          c.column_default as "defaultValue",
+          coalesce(pk.is_primary_key, false) as "isPrimaryKey",
+          case
+            when cls.reltuples >= 0 then cls.reltuples::double precision
+            else null
+          end as "estimatedRows"
+        from information_schema.columns c
+        join information_schema.tables t
+          on t.table_schema = c.table_schema
+          and t.table_name = c.table_name
+        left join pg_namespace ns
+          on ns.nspname = c.table_schema
+        left join pg_class cls
+          on cls.relnamespace = ns.oid
+          and cls.relname = c.table_name
+        left join pg_attribute a
+          on a.attrelid = cls.oid
+          and a.attname = c.column_name
+          and a.attnum > 0
+          and not a.attisdropped
+        left join (
+          select
+            kcu.table_schema,
+            kcu.table_name,
+            kcu.column_name,
+            true as is_primary_key
+          from information_schema.table_constraints tc
+          join information_schema.key_column_usage kcu
+            on kcu.constraint_name = tc.constraint_name
+            and kcu.constraint_schema = tc.constraint_schema
+            and kcu.table_schema = tc.table_schema
+            and kcu.table_name = tc.table_name
+          where tc.constraint_type = 'PRIMARY KEY'
+        ) pk
+          on pk.table_schema = c.table_schema
+          and pk.table_name = c.table_name
+          and pk.column_name = c.column_name
+        where c.table_schema <> all($1)
+          and c.table_schema not like 'pg_toast%'
+        order by c.table_schema, c.table_name, c.ordinal_position
+      `,
+      [systemSchemas],
+    );
+    const tableByKey = new Map<string, BranchSchemaTableResponse>();
+
+    for (const row of result.rows) {
+      const key = `${row.schema}.${row.tableName}`;
+      const existing = tableByKey.get(key);
+      const estimatedRows =
+        row.estimatedRows === null
+          ? null
+          : Math.max(0, Math.floor(Number(row.estimatedRows)));
+      const table =
+        existing ??
+        ({
+          columns: [],
+          estimatedRows,
+          name: row.tableName,
+          schema: row.schema,
+          type: row.tableType,
+        } satisfies BranchSchemaTableResponse);
+
+      table.columns.push({
+        dataType: row.dataType,
+        defaultValue: row.defaultValue,
+        isNullable: row.isNullable,
+        isPrimaryKey: row.isPrimaryKey,
+        name: row.columnName,
+        ordinalPosition: row.ordinalPosition,
+      });
+      tableByKey.set(key, table);
+    }
+
+    return branchSchemaResponseSchema.parse({
+      branchId,
+      tables: [...tableByKey.values()],
+    });
+  } finally {
+    await pool.end();
+  }
+}
+
+function readFirstSqlToken(sql: string) {
+  const withoutLeadingComments = sql
+    .replace(/^\s*(?:--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/\s*)*/u, "")
+    .trimStart();
+  const match = /^[a-z]+/iu.exec(withoutLeadingComments);
+
+  return match?.[0].toLowerCase() ?? "";
+}
+
+function isReadOnlySql(sql: string) {
+  return readOnlySqlTokens.has(readFirstSqlToken(sql));
+}
+
+function normalizeQueryResult(
+  result: QueryExecutionResult | QueryExecutionResult[],
+) {
+  return Array.isArray(result) ? (result.at(-1) ?? null) : result;
+}
+
+async function executeBranchSql({
+  connectionString,
+  readOnly,
+  sql,
+}: {
+  connectionString: string;
+  readOnly: boolean;
+  sql: string;
+}) {
+  if (readOnly && !isReadOnlySql(sql)) {
+    throw new HTTPException(400, {
+      message:
+        "Read-only mode only allows SELECT, WITH, EXPLAIN, and SHOW statements",
+    });
+  }
+
+  const pool = createPool(connectionString);
+  const client = await pool.connect();
+  const startedAt = performance.now();
+
+  try {
+    await client.query(readOnly ? "begin read only" : "begin");
+    await client.query("select set_config('statement_timeout', $1, true)", [
+      branchStatementTimeoutMs.toString(),
+    ]);
+
+    const rawResult = (await client.query(sql)) as
+      | QueryExecutionResult
+      | QueryExecutionResult[];
+    const result = normalizeQueryResult(rawResult);
+
+    await client.query("commit");
+
+    if (!result) {
+      return branchQueryResponseSchema.parse({
+        columns: [],
+        command: "EMPTY",
+        durationMs: Math.round(performance.now() - startedAt),
+        readOnly,
+        rowCount: 0,
+        rows: [],
+        truncated: false,
+      });
+    }
+
+    const rows = result.rows.slice(0, branchQueryRowLimit);
+
+    return branchQueryResponseSchema.parse({
+      columns: result.fields.map((field) => ({
+        dataTypeId: field.dataTypeID,
+        name: field.name,
+      })),
+      command: result.command,
+      durationMs: Math.round(performance.now() - startedAt),
+      readOnly,
+      rowCount: result.rowCount ?? result.rows.length,
+      rows,
+      truncated: result.rows.length > rows.length,
+    });
+  } catch (error) {
+    await client.query("rollback").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+    await pool.end();
+  }
+}
+
+async function serializeDatabase(
+  db: ControlPlaneDb,
+  database: typeof schema.databaseClusters.$inferSelect,
+): Promise<DatabaseResponse> {
+  await deleteExpiredBranchesForDatabase({
+    databaseId: database.id,
+    db,
+  });
+
+  const branches = await db
+    .select()
+    .from(schema.branches)
+    .where(eq(schema.branches.clusterId, database.id));
+  const endpoint = first(
+    await db
+      .select()
+      .from(schema.endpoints)
+      .where(eq(schema.endpoints.clusterId, database.id))
+      .limit(1),
+  );
+
+  return {
+    branches: branches.map(serializeBranch),
+    endpoint: endpoint
+      ? {
+          hostname: endpoint.hostname,
+          id: endpoint.id,
+          poolerMode: endpoint.poolerMode,
+          port: endpoint.port,
+        }
+      : null,
+    id: database.id,
+    name: database.name,
+    plan: database.plan,
+    postgresVersion: database.postgresVersion,
+    projectId: database.projectId,
+    regionId: database.regionId,
+    status: database.status,
+  };
+}
+
+function serializeBranch(branch: SerializableBranch): BranchResponse {
+  return {
+    copyMode: branch.copyMode,
+    expiresAt: serializeNullableDate(branch.expiresAt),
+    id: branch.id,
+    name: branch.name,
+    parentBranchId: branch.parentBranchId,
+    status: branch.status,
+  };
+}
+
+function serializeNullableDate(date: Date | null): string | null {
+  return date ? date.toISOString() : null;
+}
+
+export function createV1Routes({ env }: CreateV1RoutesOptions) {
+  const routes = new Hono<ApiBindings>();
+
+  routes.get("/regions", async (c) => {
+    const db = c.get("db");
+    await ensureDefaultRegions(db);
+
+    const providers = await db.select().from(schema.providers);
+    const regions = await db.select().from(schema.regions);
+    const providerById = new Map(
+      providers.map((provider) => [provider.id, provider]),
+    );
+    const response: RegionResponse[] = regions.flatMap((region) => {
+      const provider = providerById.get(region.providerId);
+
+      if (!provider) {
+        return [];
+      }
+
+      return [
+        {
+          code: region.code,
+          countryCode: region.countryCode,
+          id: region.id,
+          isDefault: region.isDefault,
+          name: region.name,
+          provider: {
+            id: provider.id,
+            kind: provider.kind,
+            name: provider.name,
+          },
+        },
+      ];
+    });
+
+    return c.json({
+      regions: response,
+    });
+  });
+
+  routes.get("/organizations", async (c) => {
+    const user = requireUser(c);
+    const organizations = await c
+      .get("db")
+      .select({
+        id: schema.organizations.id,
+        name: schema.organizations.name,
+        role: schema.memberships.role,
+        slug: schema.organizations.slug,
+      })
+      .from(schema.memberships)
+      .innerJoin(
+        schema.organizations,
+        eq(schema.organizations.id, schema.memberships.organizationId),
+      )
+      .where(eq(schema.memberships.userId, user.id));
+
+    return c.json({
+      organizations,
+    });
+  });
+
+  routes.post("/organizations", async (c) => {
+    const user = requireUser(c);
+    const input = await parseJson(c, createOrganizationRequestSchema);
+    const db = c.get("db");
+    const organization = {
+      id: createId("organization"),
+      name: input.name,
+      slug: input.slug,
+    };
+
+    await db.transaction(async (tx) => {
+      await tx.insert(schema.organizations).values(organization);
+      await tx.insert(schema.memberships).values({
+        id: createId("membership"),
+        organizationId: organization.id,
+        role: "owner",
+        userId: user.id,
+      });
+    });
+
+    return c.json(
+      {
+        organization: {
+          ...organization,
+          role: "owner",
+        },
+      },
+      201,
+    );
+  });
+
+  routes.get("/projects", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const organizationId = c.req.query("organizationId");
+
+    if (organizationId) {
+      await assertOrganizationAccess({
+        db,
+        organizationId,
+        userId: user.id,
+      });
+
+      const projects = await db
+        .select({
+          id: schema.projects.id,
+          name: schema.projects.name,
+          organizationId: schema.projects.organizationId,
+          slug: schema.projects.slug,
+        })
+        .from(schema.projects)
+        .where(eq(schema.projects.organizationId, organizationId));
+
+      return c.json({
+        projects,
+      });
+    }
+
+    const projects = await db
+      .select({
+        id: schema.projects.id,
+        name: schema.projects.name,
+        organizationId: schema.projects.organizationId,
+        slug: schema.projects.slug,
+      })
+      .from(schema.projects)
+      .innerJoin(
+        schema.memberships,
+        eq(schema.memberships.organizationId, schema.projects.organizationId),
+      )
+      .where(eq(schema.memberships.userId, user.id));
+
+    return c.json({
+      projects,
+    });
+  });
+
+  routes.post("/projects", async (c) => {
+    const user = requireUser(c);
+    const input = await parseJson(c, createProjectRequestSchema);
+    const db = c.get("db");
+
+    await assertOrganizationAccess({
+      db,
+      organizationId: input.organizationId,
+      requireManager: true,
+      userId: user.id,
+    });
+
+    const project = {
+      id: createId("project"),
+      name: input.name,
+      organizationId: input.organizationId,
+      slug: input.slug,
+    };
+
+    await db.insert(schema.projects).values(project);
+
+    return c.json(
+      {
+        project,
+      },
+      201,
+    );
+  });
+
+  routes.get("/projects/:projectId/databases", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const project = await assertProjectAccess({
+      db,
+      projectId: c.req.param("projectId"),
+      userId: user.id,
+    });
+    const databases = await db
+      .select()
+      .from(schema.databaseClusters)
+      .where(eq(schema.databaseClusters.projectId, project.id));
+
+    return c.json({
+      databases: await Promise.all(
+        databases.map((database) => serializeDatabase(db, database)),
+      ),
+    });
+  });
+
+  routes.post("/projects/:projectId/databases", async (c) => {
+    const user = requireUser(c);
+    const input = await parseJson(c, createDatabaseRequestSchema);
+    const db = c.get("db");
+    const project = await assertProjectAccess({
+      db,
+      projectId: c.req.param("projectId"),
+      userId: user.id,
+    });
+
+    await ensureDefaultRegions(db);
+
+    const region = first(
+      await db
+        .select()
+        .from(schema.regions)
+        .where(eq(schema.regions.id, input.regionId))
+        .limit(1),
+    );
+
+    if (!region) {
+      throw new HTTPException(400, {
+        message: "Region is not available",
+      });
+    }
+
+    const provider = first(
+      await db
+        .select()
+        .from(schema.providers)
+        .where(eq(schema.providers.id, region.providerId))
+        .limit(1),
+    );
+
+    if (!provider) {
+      throw new HTTPException(400, {
+        message: "Region provider is not available",
+      });
+    }
+
+    const database = {
+      id: createId("database_cluster"),
+      name: input.name,
+      plan: input.plan,
+      postgresVersion: input.postgresVersion,
+      projectId: project.id,
+      regionId: input.regionId,
+      status: "requested" as const,
+    };
+
+    await db.transaction(async (tx) => {
+      await tx.insert(schema.databaseClusters).values(database);
+      await tx.insert(schema.branches).values({
+        clusterId: database.id,
+        copyMode: "schema_only",
+        expiresAt: null,
+        id: createId("branch"),
+        name: "main",
+        status: "creating",
+      });
+    });
+
+    try {
+      await startControlPlaneWorkflow({
+        env,
+        name: workflowNames.provisionCluster,
+        payload: {
+          clusterId: database.id,
+          plan: database.plan,
+          postgresVersion: database.postgresVersion,
+          projectId: database.projectId,
+          provider: provider.kind,
+          regionId: database.regionId,
+        },
+        workflowId: `provision-${database.id}`,
+      });
+    } catch (error) {
+      if (error instanceof WorkflowDispatchError) {
+        throw new HTTPException(503, {
+          message:
+            "Database was recorded, but the provisioning workflow could not be started",
+        });
+      }
+
+      throw error;
+    }
+
+    const createdDatabase = first(
+      await db
+        .select()
+        .from(schema.databaseClusters)
+        .where(eq(schema.databaseClusters.id, database.id))
+        .limit(1),
+    );
+
+    if (!createdDatabase) {
+      throw new HTTPException(500, {
+        message: "Database metadata could not be loaded",
+      });
+    }
+
+    return c.json(
+      {
+        database: await serializeDatabase(db, createdDatabase),
+      },
+      201,
+    );
+  });
+
+  routes.get("/databases/:databaseId", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const database = await assertDatabaseAccess({
+      databaseId: c.req.param("databaseId"),
+      db,
+      userId: user.id,
+    });
+
+    return c.json({
+      database: await serializeDatabase(db, database),
+    });
+  });
+
+  routes.get("/branches/:branchId/connection", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const { branch, database } = await assertBranchAccess({
+      branchId: c.req.param("branchId"),
+      db,
+      userId: user.id,
+    });
+    const fallbackEndpoint = await loadBranchEndpoint({
+      branch,
+      database,
+      db,
+    });
+
+    if (!fallbackEndpoint) {
+      throw new HTTPException(404, {
+        message: "No endpoint is available for this branch",
+      });
+    }
+
+    const connectionDetails = await resolveBranchConnectionDetails({
+      branch,
+      controlDatabaseUrl: env.DATABASE_URL,
+      database,
+      endpoint: fallbackEndpoint,
+    });
+    const connection = branchConnectionResponseSchema.parse({
+      branchId: branch.id,
+      connectionString: buildBranchConnectionString({
+        databaseName: connectionDetails.databaseName,
+        endpoint: fallbackEndpoint,
+        password: connectionDetails.password,
+        revealPassword: true,
+        username: connectionDetails.username,
+      }),
+      databaseId: database.id,
+      databaseName: connectionDetails.databaseName,
+      maskedConnectionString: buildBranchConnectionString({
+        databaseName: connectionDetails.databaseName,
+        endpoint: fallbackEndpoint,
+        password: connectionDetails.password,
+        revealPassword: false,
+        username: connectionDetails.username,
+      }),
+      username: connectionDetails.username,
+    });
+
+    return c.json({ connection });
+  });
+
+  routes.get("/branches/:branchId/schema", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const { branch, database } = await assertBranchAccess({
+      branchId: c.req.param("branchId"),
+      db,
+      userId: user.id,
+    });
+    const endpoint = await loadBranchEndpoint({
+      branch,
+      database,
+      db,
+    });
+
+    if (!endpoint) {
+      throw new HTTPException(404, {
+        message: "No endpoint is available for this branch",
+      });
+    }
+
+    const connection = await resolveBranchRuntimeConnection({
+      branch,
+      controlDatabaseUrl: env.DATABASE_URL,
+      database,
+      endpoint,
+    });
+
+    return c.json({
+      schema: await loadBranchSchema({
+        branchId: branch.id,
+        connectionString: connection.connectionString,
+      }),
+    });
+  });
+
+  routes.post("/branches/:branchId/query", async (c) => {
+    const user = requireUser(c);
+    const input = await parseJson(c, executeBranchQueryRequestSchema);
+    const db = c.get("db");
+    const { branch, database } = await assertBranchAccess({
+      branchId: c.req.param("branchId"),
+      db,
+      userId: user.id,
+    });
+    const endpoint = await loadBranchEndpoint({
+      branch,
+      database,
+      db,
+    });
+
+    if (!endpoint) {
+      throw new HTTPException(404, {
+        message: "No endpoint is available for this branch",
+      });
+    }
+
+    const connection = await resolveBranchRuntimeConnection({
+      branch,
+      controlDatabaseUrl: env.DATABASE_URL,
+      database,
+      endpoint,
+    });
+    const result = await executeBranchSql({
+      connectionString: connection.connectionString,
+      readOnly: input.readOnly,
+      sql: input.sql,
+    });
+
+    return c.json({ result });
+  });
+
+  routes.post("/databases/:databaseId/branches", async (c) => {
+    const user = requireUser(c);
+    const input = await parseJson(c, createBranchRequestSchema);
+    const db = c.get("db");
+    const database = await assertDatabaseAccess({
+      databaseId: c.req.param("databaseId"),
+      db,
+      userId: user.id,
+    });
+    const expiresAt = branchExpirationFromTtl(input.expirationTtl);
+    const parentBranch = input.parentBranchId
+      ? first(
+          await db
+            .select()
+            .from(schema.branches)
+            .where(eq(schema.branches.id, input.parentBranchId))
+            .limit(1),
+        )
+      : null;
+
+    if (input.parentBranchId && !parentBranch) {
+      throw new HTTPException(400, {
+        message: "Parent branch is not available",
+      });
+    }
+
+    if (parentBranch && parentBranch.clusterId !== database.id) {
+      throw new HTTPException(400, {
+        message: "Parent branch must belong to the same database",
+      });
+    }
+
+    if (parentBranch?.expiresAt) {
+      throw new HTTPException(400, {
+        message: "Branches with an expiration cannot be used as parents",
+      });
+    }
+
+    if (parentBranch && parentBranch.status !== "ready") {
+      throw new HTTPException(409, {
+        message: "Parent branch must be ready before it can be cloned",
+      });
+    }
+
+    const branch = {
+      clusterId: database.id,
+      copyMode: parentBranch ? input.copyMode : "schema_only",
+      expiresAt,
+      id: createId("branch"),
+      name: input.name,
+      parentBranchId: input.parentBranchId ?? null,
+      status: parentBranch ? ("creating" as const) : ("ready" as const),
+    };
+
+    await db.insert(schema.branches).values(branch);
+
+    if (parentBranch) {
+      const region = first(
+        await db
+          .select()
+          .from(schema.regions)
+          .where(eq(schema.regions.id, database.regionId))
+          .limit(1),
+      );
+
+      if (!region) {
+        throw new HTTPException(400, {
+          message: "Database region is not available",
+        });
+      }
+
+      const provider = first(
+        await db
+          .select()
+          .from(schema.providers)
+          .where(eq(schema.providers.id, region.providerId))
+          .limit(1),
+      );
+
+      if (!provider) {
+        throw new HTTPException(400, {
+          message: "Database provider is not available",
+        });
+      }
+
+      try {
+        await startControlPlaneWorkflow({
+          env,
+          name: workflowNames.cloneBranch,
+          payload: {
+            clusterId: database.id,
+            copyMode: branch.copyMode,
+            provider: provider.kind,
+            sourceBranchId: parentBranch.id,
+            targetBranchId: branch.id,
+          },
+          workflowId: `clone-branch-${branch.id}`,
+        });
+      } catch (error) {
+        if (error instanceof WorkflowDispatchError) {
+          throw new HTTPException(503, {
+            message:
+              "Branch was recorded, but the clone workflow could not be started",
+          });
+        }
+
+        throw error;
+      }
+    }
+
+    return c.json(
+      {
+        branch: serializeBranch(branch),
+      },
+      parentBranch ? 202 : 201,
+    );
+  });
+
+  routes.post("/databases/:databaseId/backups", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const database = await assertDatabaseAccess({
+      databaseId: c.req.param("databaseId"),
+      db,
+      userId: user.id,
+    });
+    const backup = {
+      clusterId: database.id,
+      id: createId("backup_job"),
+      status: "queued" as const,
+    };
+
+    await db.insert(schema.backupJobs).values(backup);
+
+    try {
+      await startControlPlaneWorkflow({
+        env,
+        name: workflowNames.createBackup,
+        payload: {
+          backupJobId: backup.id,
+          clusterId: database.id,
+        },
+        workflowId: `backup-${backup.id}`,
+      });
+    } catch (error) {
+      if (error instanceof WorkflowDispatchError) {
+        throw new HTTPException(503, {
+          message:
+            "Backup job was recorded, but the backup workflow could not be started",
+        });
+      }
+
+      throw error;
+    }
+
+    return c.json(
+      {
+        backupJob: {
+          artifactUri: null,
+          databaseId: backup.clusterId,
+          errorMessage: null,
+          finishedAt: null,
+          id: backup.id,
+          startedAt: null,
+          status: backup.status,
+        },
+      },
+      202,
+    );
+  });
+
+  routes.post("/backups/:backupJobId/restores", async (c) => {
+    const user = requireUser(c);
+    const input = await parseJson(c, createRestoreRequestSchema);
+    const db = c.get("db");
+    const backup = first(
+      await db
+        .select()
+        .from(schema.backupJobs)
+        .where(eq(schema.backupJobs.id, c.req.param("backupJobId")))
+        .limit(1),
+    );
+
+    if (!backup) {
+      throw new HTTPException(404, {
+        message: "Backup job not found",
+      });
+    }
+
+    const database = await assertDatabaseAccess({
+      databaseId: backup.clusterId,
+      db,
+      userId: user.id,
+    });
+    const branch = {
+      clusterId: database.id,
+      copyMode: "schema_and_data" as const,
+      expiresAt: null,
+      id: createId("branch"),
+      name: input.targetBranchName,
+      status: "creating" as const,
+    };
+    const restore = {
+      backupJobId: backup.id,
+      id: createId("restore_job"),
+      status: "queued" as const,
+      targetBranchId: branch.id,
+    };
+
+    await db.transaction(async (tx) => {
+      await tx.insert(schema.branches).values(branch);
+      await tx.insert(schema.restoreJobs).values(restore);
+    });
+
+    try {
+      await startControlPlaneWorkflow({
+        env,
+        name: workflowNames.restoreBackup,
+        payload: {
+          backupJobId: backup.id,
+          restoreJobId: restore.id,
+          targetBranchId: branch.id,
+        },
+        workflowId: `restore-${restore.id}`,
+      });
+    } catch (error) {
+      if (error instanceof WorkflowDispatchError) {
+        throw new HTTPException(503, {
+          message:
+            "Restore job was recorded, but the restore workflow could not be started",
+        });
+      }
+
+      throw error;
+    }
+
+    return c.json(
+      {
+        restoreJob: {
+          backupJobId: restore.backupJobId,
+          errorMessage: null,
+          finishedAt: null,
+          id: restore.id,
+          startedAt: null,
+          status: restore.status,
+          targetBranchId: restore.targetBranchId,
+        },
+      },
+      202,
+    );
+  });
+
+  routes.get("/backups/:backupJobId", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const backup = first(
+      await db
+        .select()
+        .from(schema.backupJobs)
+        .where(eq(schema.backupJobs.id, c.req.param("backupJobId")))
+        .limit(1),
+    );
+
+    if (!backup) {
+      throw new HTTPException(404, {
+        message: "Backup job not found",
+      });
+    }
+
+    await assertDatabaseAccess({
+      databaseId: backup.clusterId,
+      db,
+      userId: user.id,
+    });
+
+    return c.json({
+      backupJob: {
+        artifactUri: backup.artifactUri,
+        databaseId: backup.clusterId,
+        errorMessage: backup.errorMessage,
+        finishedAt: serializeNullableDate(backup.finishedAt),
+        id: backup.id,
+        startedAt: serializeNullableDate(backup.startedAt),
+        status: backup.status,
+      },
+    });
+  });
+
+  return routes;
+}

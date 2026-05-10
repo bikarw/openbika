@@ -1,0 +1,22 @@
+{
+  "extends": "@repo/typescript-config/base.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [],
+  "references": [
+    { "path": "./apps/api" },
+    { "path": "./apps/worker" },
+    { "path": "./packages/auth" },
+    { "path": "./packages/contracts" },
+    { "path": "./packages/db" },
+    { "path": "./packages/domain" },
+    { "path": "./packages/env" },
+    { "path": "./packages/observability" },
+    { "path": "./packages/provisioning" },
+    { "path": "./packages/queue" },
+    { "path": "./packages/sdk" },
+    { "path": "./packages/test-utils" },
+    { "path": "./packages/ui" }
+  ]
+}

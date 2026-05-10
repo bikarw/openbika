@@ -1,0 +1,32 @@
+{
+  "name": "@openbika/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check-types": "tsc -p tsconfig.json --noEmit",
+    "dev": "bun run --env-file=../../.env --watch src/server.ts",
+    "lint": "eslint . --max-warnings 0",
+    "test": "bun test src/app.test.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.6",
+    "@hono/zod-openapi": "^1.3.0",
+    "@temporalio/client": "^1.17.0",
+    "@openbika/auth": "workspace:*",
+    "@openbika/contracts": "workspace:*",
+    "@openbika/db": "workspace:*",
+    "@openbika/domain": "workspace:*",
+    "@openbika/env": "workspace:*",
+    "@openbika/observability": "workspace:*",
+    "@openbika/queue": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.16",
+    "zod": "^4.4.1"
+  },
+  "devDependencies": {
+    "@repo/typescript-config": "workspace:*",
+    "vitest": "^4.0.15"
+  }
+}

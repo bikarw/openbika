@@ -1,0 +1,28 @@
+{
+  "extends": "@repo/typescript-config/base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "composite": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "paths": {
+      "@openbika/contracts": ["../../packages/contracts/src/index.ts"],
+      "@openbika/db": ["../../packages/db/src/index.ts"],
+      "@openbika/domain": ["../../packages/domain/src/index.ts"],
+      "@openbika/env": ["../../packages/env/src/index.ts"],
+      "@openbika/observability": ["../../packages/observability/src/index.ts"],
+      "@openbika/provisioning": ["../../packages/provisioning/src/index.ts"],
+      "@openbika/queue": ["../../packages/queue/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../../packages/contracts" },
+    { "path": "../../packages/db" },
+    { "path": "../../packages/domain" },
+    { "path": "../../packages/env" },
+    { "path": "../../packages/observability" },
+    { "path": "../../packages/provisioning" },
+    { "path": "../../packages/queue" }
+  ]
+}
