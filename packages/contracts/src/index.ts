@@ -10,14 +10,6 @@ export const slugSchema = z
 export const providerKindSchema = z.enum(["local", "strettch", "aos"]);
 export type ProviderKind = z.infer<typeof providerKindSchema>;
 
-export const planKindSchema = z.enum([
-  "developer",
-  "startup_ha",
-  "business_ha",
-  "enterprise",
-]);
-export type PlanKind = z.infer<typeof planKindSchema>;
-
 export const clusterStatusSchema = z.enum([
   "requested",
   "provisioning",
@@ -97,6 +89,17 @@ export const projectResponseSchema = z.object({
   slug: slugSchema,
 });
 export type ProjectResponse = z.infer<typeof projectResponseSchema>;
+
+export const projectSummaryResponseSchema = projectResponseSchema.extend({
+  branchCount: z.number().int().nonnegative(),
+  databaseCount: z.number().int().nonnegative(),
+  hasFailure: z.boolean(),
+  isProvisioning: z.boolean(),
+  workloadCount: z.number().int().nonnegative(),
+});
+export type ProjectSummaryResponse = z.infer<
+  typeof projectSummaryResponseSchema
+>;
 
 export const endpointResponseSchema = z.object({
   hostname: z.string(),
@@ -189,16 +192,119 @@ export const databaseResponseSchema = z.object({
   endpoint: endpointResponseSchema.nullable(),
   id: idSchema,
   name: z.string(),
-  plan: planKindSchema,
   postgresVersion: z.string(),
   projectId: idSchema,
   status: clusterStatusSchema,
 });
 export type DatabaseResponse = z.infer<typeof databaseResponseSchema>;
 
+export const workloadKindSchema = z.enum(["container", "function"]);
+export type WorkloadKind = z.infer<typeof workloadKindSchema>;
+
+export const workloadStatusSchema = z.enum([
+  "requested",
+  "provisioning",
+  "available",
+  "degraded",
+  "maintenance",
+  "failed",
+  "deleted",
+]);
+export type WorkloadStatus = z.infer<typeof workloadStatusSchema>;
+
+export const workloadResponseSchema = z.object({
+  createdAt: z.string(),
+  desiredState: z.record(z.string(), z.unknown()),
+  id: idSchema,
+  kind: workloadKindSchema,
+  name: z.string(),
+  observedState: z.record(z.string(), z.unknown()),
+  projectId: idSchema,
+  status: workloadStatusSchema,
+  updatedAt: z.string(),
+});
+export type WorkloadResponse = z.infer<typeof workloadResponseSchema>;
+
+const workloadNameSchema = z.string().min(1).max(63);
+
+export const createContainerWorkloadRequestSchema = z.object({
+  build: z
+    .object({
+      contextUri: z.string().min(1).optional(),
+      dockerfilePath: z.string().min(1).optional(),
+    })
+    .optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  image: z.string().min(1).optional(),
+  kind: z.literal("container"),
+  name: workloadNameSchema,
+  ports: z.array(z.number().int().min(1).max(65535)).max(16).optional(),
+});
+export type CreateContainerWorkloadRequest = z.infer<
+  typeof createContainerWorkloadRequestSchema
+>;
+
+export const functionRuntimeSchema = z.enum(["node", "bun"]);
+export type FunctionRuntime = z.infer<typeof functionRuntimeSchema>;
+
+export const functionSourceSchema = z.discriminatedUnion("type", [
+  z.object({
+    image: z.string().min(1),
+    type: z.literal("image"),
+  }),
+  z.object({
+    artifactUri: z.string().min(1),
+    type: z.literal("bundle"),
+  }),
+  z.object({
+    path: z.string().min(1).max(512).optional(),
+    ref: z.string().min(1).max(255).optional(),
+    repositoryUrl: z.string().min(1).max(2048),
+    type: z.literal("git"),
+  }),
+]);
+export type FunctionSource = z.infer<typeof functionSourceSchema>;
+
+export const createFunctionWorkloadRequestSchema = z.object({
+  entrypoint: z.string().min(1).default("index.ts"),
+  kind: z.literal("function"),
+  name: workloadNameSchema,
+  runtime: functionRuntimeSchema,
+  source: functionSourceSchema,
+});
+export type CreateFunctionWorkloadRequest = z.infer<
+  typeof createFunctionWorkloadRequestSchema
+>;
+
+export const createWorkloadRequestSchema = z
+  .discriminatedUnion("kind", [
+    createContainerWorkloadRequestSchema,
+    createFunctionWorkloadRequestSchema,
+  ])
+  .superRefine((value, ctx) => {
+    if (value.kind !== "container") {
+      return;
+    }
+
+    const hasImage = value.image !== undefined && value.image.length > 0;
+    const hasBuild =
+      value.build !== undefined &&
+      (value.build.dockerfilePath !== undefined ||
+        value.build.contextUri !== undefined);
+
+    if (!hasImage && !hasBuild) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Container workload requires an image, or build context / Dockerfile metadata in build",
+        path: ["image"],
+      });
+    }
+  });
+export type CreateWorkloadRequest = z.infer<typeof createWorkloadRequestSchema>;
+
 export const createDatabaseRequestSchema = z.object({
   name: z.string().min(1).max(63),
-  plan: planKindSchema.default("developer"),
   postgresVersion: z.string().default("18"),
 });
 export type CreateDatabaseRequest = z.infer<typeof createDatabaseRequestSchema>;
@@ -242,7 +348,6 @@ export const provisionClusterInputSchema = z.object({
   clusterId: idSchema,
   projectId: idSchema,
   provider: providerKindSchema,
-  plan: planKindSchema,
   postgresVersion: z.string().default("18"),
 });
 export type ProvisionClusterInput = z.infer<typeof provisionClusterInputSchema>;
@@ -275,4 +380,15 @@ export const rotateCredentialsInputSchema = z.object({
 });
 export type RotateCredentialsInput = z.infer<
   typeof rotateCredentialsInputSchema
+>;
+
+export const provisionWorkloadInputSchema = z.object({
+  desiredState: z.record(z.string(), z.unknown()),
+  kind: workloadKindSchema,
+  projectId: idSchema,
+  provider: providerKindSchema,
+  workloadId: idSchema,
+});
+export type ProvisionWorkloadInput = z.infer<
+  typeof provisionWorkloadInputSchema
 >;

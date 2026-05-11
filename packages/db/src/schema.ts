@@ -16,13 +16,6 @@ export const providerKind = pgEnum("provider_kind", [
   "aos",
 ]);
 
-export const planKind = pgEnum("plan_kind", [
-  "developer",
-  "startup_ha",
-  "business_ha",
-  "enterprise",
-]);
-
 export const clusterStatus = pgEnum("cluster_status", [
   "requested",
   "provisioning",
@@ -52,6 +45,18 @@ export const jobStatus = pgEnum("job_status", [
   "succeeded",
   "failed",
   "cancelled",
+]);
+
+export const workloadKind = pgEnum("workload_kind", ["container", "function"]);
+
+export const workloadStatus = pgEnum("workload_status", [
+  "requested",
+  "provisioning",
+  "available",
+  "degraded",
+  "maintenance",
+  "failed",
+  "deleted",
 ]);
 
 const timestamps = {
@@ -198,6 +203,35 @@ export const projects = pgTable(
   }),
 );
 
+export const projectWorkloads = pgTable(
+  "project_workloads",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    kind: workloadKind("kind").notNull(),
+    status: workloadStatus("status").notNull().default("requested"),
+    desiredState: jsonb("desired_state")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    observedState: jsonb("observed_state")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    ...timestamps,
+  },
+  (table) => ({
+    projectNameIdx: uniqueIndex("project_workloads_project_name_idx").on(
+      table.projectId,
+      table.name,
+    ),
+    statusIdx: index("project_workloads_status_idx").on(table.status),
+  }),
+);
+
 export const databaseClusters = pgTable(
   "database_clusters",
   {
@@ -206,7 +240,6 @@ export const databaseClusters = pgTable(
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
-    plan: planKind("plan").notNull(),
     status: clusterStatus("status").notNull().default("requested"),
     postgresVersion: text("postgres_version").notNull().default("18"),
     desiredState: jsonb("desired_state")

@@ -2,6 +2,7 @@ import type {
   CloneBranchInput,
   CreateBackupInput,
   ProvisionClusterInput,
+  ProvisionWorkloadInput,
   RestoreBackupInput,
   RotateCredentialsInput,
 } from "@openbika/contracts";
@@ -16,6 +17,13 @@ export interface ProvisionedCluster {
   clusterId: string;
   endpoint: ProvisionedEndpoint;
   providerResourceId: string;
+}
+
+export interface ProvisionedWorkload {
+  providerResourceId: string;
+  /** Invokable base URL when the control plane exposes one (placeholders in local dev). */
+  publicBaseUrl?: string;
+  workloadId: string;
 }
 
 export interface BackupArtifact {
@@ -43,6 +51,7 @@ export interface RotatedCredentials {
 export interface DataPlaneProvider {
   readonly name: string;
   provisionCluster(input: ProvisionClusterInput): Promise<ProvisionedCluster>;
+  provisionWorkload(input: ProvisionWorkloadInput): Promise<ProvisionedWorkload>;
   cloneBranch(input: CloneBranchInput): Promise<CloneBranchResult>;
   createBackup(input: CreateBackupInput): Promise<BackupArtifact>;
   restoreBackup(input: RestoreBackupInput): Promise<RestoreResult>;
@@ -63,6 +72,18 @@ export class LocalDataPlaneProvider implements DataPlaneProvider {
         poolerMode: "transaction",
       },
       providerResourceId: `local-${input.clusterId}`,
+    };
+  }
+
+  async provisionWorkload(
+    input: ProvisionWorkloadInput,
+  ): Promise<ProvisionedWorkload> {
+    const port = input.kind === "function" ? 9100 : 9200;
+
+    return {
+      providerResourceId: `local-${input.kind}-${input.workloadId}`,
+      publicBaseUrl: `http://127.0.0.1:${port}/projects/${input.projectId}/workloads/${input.workloadId}`,
+      workloadId: input.workloadId,
     };
   }
 

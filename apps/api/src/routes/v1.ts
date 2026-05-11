@@ -7,18 +7,20 @@ import {
   createOrganizationRequestSchema,
   createProjectRequestSchema,
   createRestoreRequestSchema,
+  createWorkloadRequestSchema,
   executeBranchQueryRequestSchema,
   type BranchExpirationTtl,
   type BranchResponse,
   type BranchSchemaTableResponse,
   type DatabaseResponse,
+  type WorkloadResponse,
 } from "@openbika/contracts";
 import { createPool, schema } from "@openbika/db";
 import type { ControlPlaneDb } from "@openbika/db";
 import { createId } from "@openbika/domain";
 import type { ApiEnv } from "@openbika/env";
 import { workflowNames } from "@openbika/queue";
-import { and, eq, lte } from "drizzle-orm";
+import { and, eq, inArray, lte } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
@@ -43,6 +45,7 @@ const branchStatementTimeoutMs = 5_000;
 const maxSlugLength = 63;
 const maxProjectSlugAttempts = 25;
 const projectSlugConflictConstraint = "projects_organization_slug_idx";
+const workloadNameConflictConstraint = "project_workloads_project_name_idx";
 const readOnlySqlTokens = new Set(["explain", "select", "show", "with"]);
 const systemSchemas = ["information_schema", "pg_catalog"];
 
@@ -150,6 +153,17 @@ function isProjectSlugConflict(error: unknown): boolean {
     "constraint" in error &&
     error.code === "23505" &&
     error.constraint === projectSlugConflictConstraint
+  );
+}
+
+function isWorkloadNameConflict(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    "constraint" in error &&
+    error.code === "23505" &&
+    error.constraint === workloadNameConflictConstraint
   );
 }
 
@@ -293,6 +307,38 @@ async function assertDatabaseAccess({
   });
 
   return database;
+}
+
+async function assertWorkloadAccess({
+  db,
+  userId,
+  workloadId,
+}: {
+  db: ControlPlaneDb;
+  userId: string;
+  workloadId: string;
+}) {
+  const workload = first(
+    await db
+      .select()
+      .from(schema.projectWorkloads)
+      .where(eq(schema.projectWorkloads.id, workloadId))
+      .limit(1),
+  );
+
+  if (!workload) {
+    throw new HTTPException(404, {
+      message: "Workload not found",
+    });
+  }
+
+  await assertProjectAccess({
+    db,
+    projectId: workload.projectId,
+    userId,
+  });
+
+  return workload;
 }
 
 async function deleteExpiredBranchesForDatabase({
@@ -488,10 +534,15 @@ async function ensureLocalBranchDatabase({
   const token = localBranchToken(branch.id);
   const username = `${databaseName}_owner`;
   const password = `bpg_${token}`;
+  const lockKey = `openbika:branch:${branch.id}`;
   const pool = createPool(connectionString);
   const client = await pool.connect();
+  let acquiredLock = false;
 
   try {
+    await client.query("select pg_advisory_lock(hashtext($1))", [lockKey]);
+    acquiredLock = true;
+
     for (const candidate of localBranchDatabaseNameCandidates(branch.id)) {
       const existingDatabase = await client.query<{ exists: boolean }>(
         "select exists(select 1 from pg_database where datname = $1)",
@@ -542,6 +593,11 @@ async function ensureLocalBranchDatabase({
       );
     }
   } finally {
+    if (acquiredLock) {
+      await client
+        .query("select pg_advisory_unlock(hashtext($1))", [lockKey])
+        .catch(() => undefined);
+    }
     client.release();
     await pool.end();
   }
@@ -831,7 +887,6 @@ async function serializeDatabase(
       : null,
     id: database.id,
     name: database.name,
-    plan: database.plan,
     postgresVersion: database.postgresVersion,
     projectId: database.projectId,
     status: database.status,
@@ -851,6 +906,43 @@ function serializeBranch(branch: SerializableBranch): BranchResponse {
 
 function serializeNullableDate(date: Date | null): string | null {
   return date ? date.toISOString() : null;
+}
+
+type CreateWorkloadBody = z.infer<typeof createWorkloadRequestSchema>;
+
+function buildWorkloadDesiredState(
+  input: CreateWorkloadBody,
+): Record<string, unknown> {
+  if (input.kind === "container") {
+    return {
+      build: input.build,
+      env: input.env,
+      image: input.image,
+      ports: input.ports,
+    };
+  }
+
+  return {
+    entrypoint: input.entrypoint,
+    runtime: input.runtime,
+    source: input.source,
+  };
+}
+
+function serializeWorkload(
+  workload: typeof schema.projectWorkloads.$inferSelect,
+): WorkloadResponse {
+  return {
+    createdAt: workload.createdAt.toISOString(),
+    desiredState: workload.desiredState,
+    id: workload.id,
+    kind: workload.kind,
+    name: workload.name,
+    observedState: workload.observedState,
+    projectId: workload.projectId,
+    status: workload.status,
+    updatedAt: workload.updatedAt.toISOString(),
+  };
 }
 
 export function createV1Routes({ env }: CreateV1RoutesOptions) {
@@ -955,6 +1047,133 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
     });
   });
 
+  routes.get("/projects/summaries", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const organizationId = c.req.query("organizationId");
+
+    if (!organizationId) {
+      throw new HTTPException(400, {
+        message: "organizationId query parameter is required",
+      });
+    }
+
+    await assertOrganizationAccess({
+      db,
+      organizationId,
+      userId: user.id,
+    });
+
+    const projects = await db
+      .select()
+      .from(schema.projects)
+      .where(eq(schema.projects.organizationId, organizationId));
+
+    if (projects.length === 0) {
+      return c.json({ summaries: [] });
+    }
+
+    const projectIds = projects.map((project) => project.id);
+    const databases = await db
+      .select({
+        id: schema.databaseClusters.id,
+        projectId: schema.databaseClusters.projectId,
+        status: schema.databaseClusters.status,
+      })
+      .from(schema.databaseClusters)
+      .where(inArray(schema.databaseClusters.projectId, projectIds));
+    const workloads = await db
+      .select({
+        projectId: schema.projectWorkloads.projectId,
+        status: schema.projectWorkloads.status,
+      })
+      .from(schema.projectWorkloads)
+      .where(inArray(schema.projectWorkloads.projectId, projectIds));
+    const databaseIds = databases.map((database) => database.id);
+    const branchRows = databaseIds.length
+      ? await db
+          .select({
+            clusterId: schema.branches.clusterId,
+            status: schema.branches.status,
+          })
+          .from(schema.branches)
+          .where(inArray(schema.branches.clusterId, databaseIds))
+      : [];
+
+    const databasesByProject = new Map<
+      string,
+      Array<(typeof databases)[number]>
+    >();
+    for (const database of databases) {
+      const list = databasesByProject.get(database.projectId) ?? [];
+      list.push(database);
+      databasesByProject.set(database.projectId, list);
+    }
+
+    const workloadsByProject = new Map<
+      string,
+      Array<(typeof workloads)[number]>
+    >();
+    for (const workload of workloads) {
+      const list = workloadsByProject.get(workload.projectId) ?? [];
+      list.push(workload);
+      workloadsByProject.set(workload.projectId, list);
+    }
+
+    const branchesByDatabase = new Map<
+      string,
+      Array<(typeof branchRows)[number]>
+    >();
+    for (const branch of branchRows) {
+      const list = branchesByDatabase.get(branch.clusterId) ?? [];
+      list.push(branch);
+      branchesByDatabase.set(branch.clusterId, list);
+    }
+
+    const summaries = projects.map((project) => {
+      const projectDatabases = databasesByProject.get(project.id) ?? [];
+      const projectWorkloads = workloadsByProject.get(project.id) ?? [];
+      const projectBranches = projectDatabases.flatMap(
+        (database) => branchesByDatabase.get(database.id) ?? [],
+      );
+
+      const isProvisioning =
+        projectDatabases.some(
+          (database) =>
+            database.status === "requested" ||
+            database.status === "provisioning",
+        ) ||
+        projectWorkloads.some(
+          (workload) =>
+            workload.status === "requested" ||
+            workload.status === "provisioning",
+        ) ||
+        projectBranches.some(
+          (branch) =>
+            branch.status === "requested" || branch.status === "creating",
+        );
+
+      const hasFailure =
+        projectDatabases.some((database) => database.status === "failed") ||
+        projectWorkloads.some((workload) => workload.status === "failed") ||
+        projectBranches.some((branch) => branch.status === "failed");
+
+      return {
+        branchCount: projectBranches.length,
+        databaseCount: projectDatabases.length,
+        hasFailure,
+        id: project.id,
+        isProvisioning,
+        name: project.name,
+        organizationId: project.organizationId,
+        slug: project.slug,
+        workloadCount: projectWorkloads.length,
+      };
+    });
+
+    return c.json({ summaries });
+  });
+
   routes.post("/projects", async (c) => {
     const user = requireUser(c);
     const input = await parseJson(c, createProjectRequestSchema);
@@ -1033,7 +1252,6 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
     const database = {
       id: createId("database_cluster"),
       name: input.name,
-      plan: input.plan,
       postgresVersion: input.postgresVersion,
       projectId: project.id,
       status: "requested" as const,
@@ -1057,7 +1275,6 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
         name: workflowNames.provisionCluster,
         payload: {
           clusterId: database.id,
-          plan: database.plan,
           postgresVersion: database.postgresVersion,
           projectId: database.projectId,
           provider: "local",
@@ -1066,6 +1283,21 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       });
     } catch (error) {
       if (error instanceof WorkflowDispatchError) {
+        await db
+          .update(schema.databaseClusters)
+          .set({
+            observedState: { error: "Provisioning workflow could not start" },
+            status: "failed",
+            updatedAt: new Date(),
+          })
+          .where(eq(schema.databaseClusters.id, database.id))
+          .catch(() => undefined);
+        await db
+          .update(schema.branches)
+          .set({ status: "failed", updatedAt: new Date() })
+          .where(eq(schema.branches.clusterId, database.id))
+          .catch(() => undefined);
+
         throw new HTTPException(503, {
           message:
             "Database was recorded, but the provisioning workflow could not be started",
@@ -1095,6 +1327,125 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       },
       201,
     );
+  });
+
+  routes.get("/projects/:projectId/workloads", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const project = await assertProjectAccess({
+      db,
+      projectId: c.req.param("projectId"),
+      userId: user.id,
+    });
+    const workloads = await db
+      .select()
+      .from(schema.projectWorkloads)
+      .where(eq(schema.projectWorkloads.projectId, project.id));
+
+    return c.json({
+      workloads: workloads.map(serializeWorkload),
+    });
+  });
+
+  routes.post("/projects/:projectId/workloads", async (c) => {
+    const user = requireUser(c);
+    const input = await parseJson(c, createWorkloadRequestSchema);
+    const db = c.get("db");
+    const project = await assertProjectAccess({
+      db,
+      projectId: c.req.param("projectId"),
+      userId: user.id,
+    });
+
+    const workload = {
+      desiredState: buildWorkloadDesiredState(input),
+      id: createId("project_workload"),
+      kind: input.kind,
+      name: input.name,
+      projectId: project.id,
+      status: "requested" as const,
+    };
+
+    try {
+      await db.insert(schema.projectWorkloads).values(workload);
+    } catch (error) {
+      if (!isWorkloadNameConflict(error)) {
+        throw error;
+      }
+
+      throw new HTTPException(409, {
+        message: "A workload with this name already exists in the project",
+      });
+    }
+
+    try {
+      await startControlPlaneWorkflow({
+        env,
+        name: workflowNames.provisionWorkload,
+        payload: {
+          desiredState: workload.desiredState,
+          kind: workload.kind,
+          projectId: workload.projectId,
+          provider: "local",
+          workloadId: workload.id,
+        },
+        workflowId: `provision-workload-${workload.id}`,
+      });
+    } catch (error) {
+      if (error instanceof WorkflowDispatchError) {
+        await db
+          .update(schema.projectWorkloads)
+          .set({
+            observedState: { error: "Provisioning workflow could not start" },
+            status: "failed",
+            updatedAt: new Date(),
+          })
+          .where(eq(schema.projectWorkloads.id, workload.id))
+          .catch(() => undefined);
+
+        throw new HTTPException(503, {
+          message:
+            "Workload was recorded, but the provisioning workflow could not be started",
+        });
+      }
+
+      throw error;
+    }
+
+    const created = first(
+      await db
+        .select()
+        .from(schema.projectWorkloads)
+        .where(eq(schema.projectWorkloads.id, workload.id))
+        .limit(1),
+    );
+
+    if (!created) {
+      throw new HTTPException(500, {
+        message: "Workload metadata could not be loaded",
+      });
+    }
+
+    return c.json(
+      {
+        workload: serializeWorkload(created),
+      },
+      201,
+    );
+  });
+
+  routes.get("/workloads/:workloadId", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const workload = await assertWorkloadAccess({
+      db,
+      userId: user.id,
+      workloadId: c.req.param("workloadId"),
+    });
+
+    return c.json({
+      workload: serializeWorkload(workload),
+    });
   });
 
   routes.get("/databases/:databaseId", async (c) => {
@@ -1304,6 +1655,12 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
         });
       } catch (error) {
         if (error instanceof WorkflowDispatchError) {
+          await db
+            .update(schema.branches)
+            .set({ status: "failed", updatedAt: new Date() })
+            .where(eq(schema.branches.id, branch.id))
+            .catch(() => undefined);
+
           throw new HTTPException(503, {
             message:
               "Branch was recorded, but the clone workflow could not be started",

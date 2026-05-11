@@ -1,6 +1,6 @@
 {
-  "id": "0d8639cb-0b2f-4dfb-8f7a-00f77936116f",
-  "prevId": "473b565f-f163-4dcc-9ddd-eb05bc02f158",
+  "id": "ad9076a2-13e1-4101-91a7-5b308ff5e485",
+  "prevId": "0d8639cb-0b2f-4dfb-8f7a-00f77936116f",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -474,13 +474,6 @@
         "name": {
           "name": "name",
           "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "plan": {
-          "name": "plan",
-          "type": "plan_kind",
-          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
@@ -1404,16 +1397,6 @@
         "succeeded",
         "failed",
         "cancelled"
-      ]
-    },
-    "public.plan_kind": {
-      "name": "plan_kind",
-      "schema": "public",
-      "values": [
-        "developer",
-        "startup_ha",
-        "business_ha",
-        "enterprise"
       ]
     },
     "public.provider_kind": {

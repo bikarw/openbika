@@ -3,6 +3,7 @@ import type {
   CloneBranchInput,
   CreateBackupInput,
   ProvisionClusterInput,
+  ProvisionWorkloadInput,
   RestoreBackupInput,
   RotateCredentialsInput,
 } from "@openbika/contracts";
@@ -10,6 +11,7 @@ import type {
   BackupArtifact,
   CloneBranchResult,
   ProvisionedCluster,
+  ProvisionedWorkload,
   RestoreResult,
   RotatedCredentials,
 } from "@openbika/provisioning";
@@ -20,6 +22,7 @@ const {
   cloneBranchActivity,
   createBackupActivity,
   provisionClusterActivity,
+  provisionWorkloadActivity,
   restoreBackupActivity,
   rotateCredentialsActivity,
 } = proxyActivities<typeof activities>({
@@ -34,6 +37,12 @@ export async function provisionCluster(
   input: ProvisionClusterInput,
 ): Promise<ProvisionedCluster> {
   return provisionClusterActivity(input);
+}
+
+export async function provisionWorkload(
+  input: ProvisionWorkloadInput,
+): Promise<ProvisionedWorkload> {
+  return provisionWorkloadActivity(input);
 }
 
 export async function cloneBranch(

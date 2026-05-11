@@ -3,7 +3,10 @@ import {
   useNavigate,
   useRouter,
 } from "@tanstack/react-router";
-import type { OrganizationResponse, ProjectResponse } from "@openbika/contracts";
+import type {
+  OrganizationResponse,
+  ProjectSummaryResponse,
+} from "@openbika/contracts";
 import * as React from "react";
 
 import { authClient } from "#/auth-client";
@@ -34,33 +37,6 @@ function pickOrganization(
   return organizations[0] ?? null;
 }
 
-function buildProjectSlug(name: string, projects: ProjectResponse[]) {
-  const base =
-    name
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .replace(/-{2,}/g, "-")
-      .slice(0, 63) || "project";
-  const normalized = base.length >= 2 ? base : `${base}-project`;
-  const existingSlugs = new Set(projects.map((project) => project.slug));
-
-  if (!existingSlugs.has(normalized)) {
-    return normalized;
-  }
-
-  for (let index = 2; index < 100; index += 1) {
-    const suffix = `-${index}`;
-    const candidate = `${normalized.slice(0, 63 - suffix.length)}${suffix}`;
-    if (!existingSlugs.has(candidate)) {
-      return candidate;
-    }
-  }
-
-  return `${normalized.slice(0, 55)}-${Date.now().toString(36)}`;
-}
-
 function ProjectsRoutePage() {
   const { organizationSlug } = Route.useParams();
   const router = useRouter();
@@ -69,10 +45,9 @@ function ProjectsRoutePage() {
   const [organizations, setOrganizations] = React.useState<
     OrganizationResponse[]
   >([]);
-  const [projects, setProjects] = React.useState<ProjectResponse[]>([]);
-  const [projectBranchCounts, setProjectBranchCounts] = React.useState<
-    Record<string, number>
-  >({});
+  const [summaries, setSummaries] = React.useState<ProjectSummaryResponse[]>(
+    [],
+  );
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [pending, setPending] = React.useState(true);
   const [healthStatus, setHealthStatus] = React.useState<
@@ -81,16 +56,22 @@ function ProjectsRoutePage() {
 
   const selectedOrganizationId =
     organizations.find((o) => o.slug === organizationSlug)?.id ?? null;
+  const hasProvisioning = summaries.some(
+    (summary) =>
+      summary.organizationId === selectedOrganizationId &&
+      summary.isProvisioning,
+  );
 
   React.useEffect(() => {
     let cancelled = false;
     const client = getDashboardApiClient();
 
-    async function load() {
-      setPending(true);
-      setLoadError(null);
-      setProjectBranchCounts({});
-      setHealthStatus("loading");
+    async function load(showLoading: boolean) {
+      if (showLoading) {
+        setPending(true);
+        setLoadError(null);
+        setHealthStatus("loading");
+      }
 
       try {
         const healthPromise = client.health().then(
@@ -104,8 +85,7 @@ function ProjectsRoutePage() {
         if (!active) {
           const fallback = pickOrganization(orgs);
           setOrganizations(orgs);
-          setProjects([]);
-          setProjectBranchCounts({});
+          setSummaries([]);
 
           if (!fallback) {
             setLoadError("No organizations available.");
@@ -123,47 +103,55 @@ function ProjectsRoutePage() {
 
         writeStoredOrganizationId(active.id);
 
-        const [projList, healthy] = await Promise.all([
-          client.listProjects({ organizationId: active.id }),
+        const [nextSummaries, healthy] = await Promise.all([
+          client.listProjectSummaries(active.id),
           healthPromise,
         ]);
         if (cancelled) return;
 
-        const branchCountEntries = await Promise.all(
-          projList.map(async (project) => {
-            const databases = await client.listDatabases(project.id);
-            const branchCount = databases.reduce(
-              (total, database) => total + database.branches.length,
-              0,
-            );
-
-            return [project.id, branchCount] as const;
-          }),
-        );
-        if (cancelled) return;
-
         setOrganizations(orgs);
-        setProjects(projList);
-        setProjectBranchCounts(Object.fromEntries(branchCountEntries));
+        setSummaries(nextSummaries);
         setHealthStatus(healthy ? "ok" : "error");
       } catch (err) {
         if (cancelled) return;
         setLoadError(
           err instanceof Error ? err.message : "Failed to load dashboard data",
         );
-        setProjects([]);
-        setProjectBranchCounts({});
+        setSummaries([]);
         setHealthStatus("error");
       } finally {
-        if (!cancelled) setPending(false);
+        if (!cancelled && showLoading) setPending(false);
       }
     }
 
-    void load();
+    void load(true);
     return () => {
       cancelled = true;
     };
   }, [navigate, organizationSlug]);
+
+  React.useEffect(() => {
+    if (!hasProvisioning) return;
+
+    const client = getDashboardApiClient();
+    const orgId = selectedOrganizationId;
+    if (!orgId) return;
+
+    let cancelled = false;
+    const intervalId = window.setInterval(() => {
+      void client
+        .listProjectSummaries(orgId)
+        .then((next) => {
+          if (!cancelled) setSummaries(next);
+        })
+        .catch(() => undefined);
+    }, 3_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [hasProvisioning, selectedOrganizationId]);
 
   function handleSelectOrganization(organizationId: string) {
     const organization = organizations.find((org) => org.id === organizationId);
@@ -182,15 +170,21 @@ function ProjectsRoutePage() {
     }
 
     const client = getDashboardApiClient();
-    const slug = buildProjectSlug(input.name, projects);
+    const fallbackSlug =
+      input.name
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 63) || "project";
     const project = await client.createProject({
       name: input.name,
       organizationId: selectedOrganizationId,
-      slug,
+      slug: fallbackSlug.length >= 2 ? fallbackSlug : `${fallbackSlug}-project`,
     });
 
     await client.createDatabase(project.id, {
-      name: slug,
+      name: project.slug,
     });
 
     await navigate({
@@ -220,13 +214,12 @@ function ProjectsRoutePage() {
       }
     >
       <ProjectsPanel
-        branchCountsByProjectId={projectBranchCounts}
         errorMessage={loadError}
         loading={pending}
-        organizations={organizations}
-        projects={projects}
         onCreateProject={handleCreateProject}
+        organizations={organizations}
         selectedOrganizationId={selectedOrganizationId}
+        summaries={summaries}
       />
     </DashboardShell>
   );

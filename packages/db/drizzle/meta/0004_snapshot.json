@@ -1,6 +1,6 @@
 {
-  "id": "0d8639cb-0b2f-4dfb-8f7a-00f77936116f",
-  "prevId": "473b565f-f163-4dcc-9ddd-eb05bc02f158",
+  "id": "9c7cce6d-3774-43c5-843c-9e55bd035674",
+  "prevId": "ad9076a2-13e1-4101-91a7-5b308ff5e485",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -477,13 +477,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "plan": {
-          "name": "plan",
-          "type": "plan_kind",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
         "status": {
           "name": "status",
           "type": "cluster_status",
@@ -851,6 +844,131 @@
         }
       },
       "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.project_workloads": {
+      "name": "project_workloads",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "workload_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "workload_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'requested'"
+        },
+        "desired_state": {
+          "name": "desired_state",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "observed_state": {
+          "name": "observed_state",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "project_workloads_project_name_idx": {
+          "name": "project_workloads_project_name_idx",
+          "columns": [
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "project_workloads_status_idx": {
+          "name": "project_workloads_status_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "project_workloads_project_id_projects_id_fk": {
+          "name": "project_workloads_project_id_projects_id_fk",
+          "tableFrom": "project_workloads",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
@@ -1406,16 +1524,6 @@
         "cancelled"
       ]
     },
-    "public.plan_kind": {
-      "name": "plan_kind",
-      "schema": "public",
-      "values": [
-        "developer",
-        "startup_ha",
-        "business_ha",
-        "enterprise"
-      ]
-    },
     "public.provider_kind": {
       "name": "provider_kind",
       "schema": "public",
@@ -1423,6 +1531,27 @@
         "local",
         "strettch",
         "aos"
+      ]
+    },
+    "public.workload_kind": {
+      "name": "workload_kind",
+      "schema": "public",
+      "values": [
+        "container",
+        "function"
+      ]
+    },
+    "public.workload_status": {
+      "name": "workload_status",
+      "schema": "public",
+      "values": [
+        "requested",
+        "provisioning",
+        "available",
+        "degraded",
+        "maintenance",
+        "failed",
+        "deleted"
       ]
     }
   },

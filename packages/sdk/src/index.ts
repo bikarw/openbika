@@ -14,6 +14,7 @@ import {
   type CreateOrganizationRequest,
   type CreateProjectRequest,
   type CreateRestoreRequest,
+  type CreateWorkloadRequest,
   type DatabaseResponse,
   databaseResponseSchema,
   type ExecuteBranchQueryRequest,
@@ -23,8 +24,12 @@ import {
   organizationResponseSchema,
   type ProjectResponse,
   projectResponseSchema,
+  type ProjectSummaryResponse,
+  projectSummaryResponseSchema,
   type RestoreJobResponse,
   restoreJobResponseSchema,
+  type WorkloadResponse,
+  workloadResponseSchema,
 } from "@openbika/contracts";
 
 export interface OpenbikaClientOptions {
@@ -42,9 +47,9 @@ export interface OpenbikaUser {
 
 export type CreateDatabaseInput = Omit<
   CreateDatabaseRequest,
-  "plan" | "postgresVersion"
+  "postgresVersion"
 > &
-  Partial<Pick<CreateDatabaseRequest, "plan" | "postgresVersion">>;
+  Partial<Pick<CreateDatabaseRequest, "postgresVersion">>;
 
 export interface ListProjectsInput {
   organizationId?: string;
@@ -160,6 +165,20 @@ export class OpenbikaClient {
     });
   }
 
+  async listProjectSummaries(
+    organizationId: string,
+  ): Promise<ProjectSummaryResponse[]> {
+    const search = new URLSearchParams({ organizationId });
+
+    return this.request({
+      parse: (body) =>
+        projectSummaryResponseSchema
+          .array()
+          .parse(readProperty(body, "summaries")),
+      path: `/v1/projects/summaries?${search}`,
+    });
+  }
+
   async createProject(input: CreateProjectRequest): Promise<ProjectResponse> {
     return this.request({
       body: input,
@@ -188,6 +207,35 @@ export class OpenbikaClient {
       parse: (body) =>
         databaseResponseSchema.parse(readProperty(body, "database")),
       path: `/v1/projects/${encodeURIComponent(projectId)}/databases`,
+    });
+  }
+
+  async listWorkloads(projectId: string): Promise<WorkloadResponse[]> {
+    return this.request({
+      parse: (body) =>
+        workloadResponseSchema.array().parse(readProperty(body, "workloads")),
+      path: `/v1/projects/${encodeURIComponent(projectId)}/workloads`,
+    });
+  }
+
+  async createWorkload(
+    projectId: string,
+    input: CreateWorkloadRequest,
+  ): Promise<WorkloadResponse> {
+    return this.request({
+      body: input,
+      method: "POST",
+      parse: (body) =>
+        workloadResponseSchema.parse(readProperty(body, "workload")),
+      path: `/v1/projects/${encodeURIComponent(projectId)}/workloads`,
+    });
+  }
+
+  async getWorkload(workloadId: string): Promise<WorkloadResponse> {
+    return this.request({
+      parse: (body) =>
+        workloadResponseSchema.parse(readProperty(body, "workload")),
+      path: `/v1/workloads/${encodeURIComponent(workloadId)}`,
     });
   }
 

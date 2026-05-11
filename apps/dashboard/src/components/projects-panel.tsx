@@ -1,6 +1,6 @@
 import type {
   OrganizationResponse,
-  ProjectResponse,
+  ProjectSummaryResponse,
 } from "@openbika/contracts";
 import { Button } from "@openbika/ui/components/button";
 import {
@@ -11,37 +11,39 @@ import {
   CardTitle,
 } from "@openbika/ui/components/card";
 import { Input } from "@openbika/ui/components/input";
+import { cn } from "@openbika/ui/lib/utils";
 import {
+  AlertCircle,
   ArrowUpRight,
+  Boxes,
   Database,
   GitBranch,
   Hash,
   Plus,
+  Workflow,
   X,
 } from "lucide-react";
 import * as React from "react";
 
 export interface ProjectsPanelProps {
-  branchCountsByProjectId: Record<string, number>;
   errorMessage: string | null;
   loading: boolean;
   onCreateProject: (input: { name: string }) => Promise<void>;
   organizations: OrganizationResponse[];
-  projects: ProjectResponse[];
   selectedOrganizationId: string | null;
+  summaries: ProjectSummaryResponse[];
 }
 
 export function ProjectsPanel({
-  branchCountsByProjectId,
   errorMessage,
   loading,
   onCreateProject,
   organizations,
-  projects,
   selectedOrganizationId,
+  summaries,
 }: ProjectsPanelProps) {
   const org = organizations.find((o) => o.id === selectedOrganizationId);
-  const rows = projects.filter(
+  const rows = summaries.filter(
     (p) =>
       selectedOrganizationId !== null &&
       p.organizationId === selectedOrganizationId,
@@ -55,7 +57,7 @@ export function ProjectsPanel({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
           <p className="text-muted-foreground text-sm">
-            Manage Postgres projects for this organization.
+            Databases, containers and functions for this organization.
           </p>
         </div>
         <CreateProjectModal
@@ -79,64 +81,163 @@ export function ProjectsPanel({
           </Card>
         ) : rows.length === 0 ? (
           <Card>
-            <CardContent className="text-muted-foreground py-6 text-sm">
-              No projects yet. Create one to get started.
+            <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
+              <div className="flex size-12 items-center justify-center rounded-full border border-dashed border-border bg-muted/40">
+                <Boxes className="text-muted-foreground size-6" />
+              </div>
+              <div className="space-y-1">
+                <p className="font-medium text-sm">No projects yet</p>
+                <p className="text-muted-foreground text-sm">
+                  Create one to get started.
+                </p>
+              </div>
             </CardContent>
           </Card>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {rows.map((project) => {
-              const branchCount = branchCountsByProjectId[project.id] ?? 0;
-              const branchLabel =
-                branchCount === 1 ? "1 branch" : `${branchCount} branches`;
-              const projectHref = org
-                ? `/${org.slug}/projects/${project.slug}`
-                : "#";
-
-              return (
-                <a
-                  aria-label={`Open ${project.name}`}
-                  className="group block h-full"
-                  href={projectHref}
-                  key={project.id}
-                >
-                  <Card className="h-full transition-colors group-hover:bg-accent/40">
-                    <CardHeader>
-                      <div className="flex min-w-0 items-start gap-3">
-                        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-muted">
-                          <Database className="text-muted-foreground size-5" />
-                        </div>
-                        <div className="min-w-0">
-                          <CardTitle className="truncate text-base">
-                            {project.name}
-                          </CardTitle>
-                        </div>
-                      </div>
-                    </CardHeader>
-                    <CardFooter className="flex-wrap justify-start gap-2">
-                      <span className="text-muted-foreground group-hover:text-foreground inline-flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors">
-                        <Hash className="size-3.5 shrink-0" />
-                        <span className="truncate font-mono">
-                          {project.slug}
-                        </span>
-                      </span>
-                      <span className="text-muted-foreground group-hover:text-foreground inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors">
-                        <GitBranch className="size-3.5" />
-                        {branchLabel}
-                      </span>
-                      <span className="text-muted-foreground group-hover:text-foreground ml-auto inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors">
-                        Open
-                        <ArrowUpRight className="size-3.5" />
-                      </span>
-                    </CardFooter>
-                  </Card>
-                </a>
-              );
-            })}
+            {rows.map((project) => (
+              <ProjectCard
+                key={project.id}
+                organizationSlug={org?.slug ?? null}
+                project={project}
+              />
+            ))}
           </div>
         )}
       </div>
     </div>
+  );
+}
+
+function ProjectCard({
+  organizationSlug,
+  project,
+}: {
+  organizationSlug: string | null;
+  project: ProjectSummaryResponse;
+}) {
+  const projectHref = organizationSlug
+    ? `/${organizationSlug}/projects/${project.slug}`
+    : "#";
+  const serviceCount = project.databaseCount + project.workloadCount;
+
+  return (
+    <a
+      aria-label={`Open ${project.name}`}
+      className="group block h-full"
+      href={projectHref}
+    >
+      <Card className="h-full transition-colors group-hover:border-foreground/30">
+        <CardHeader>
+          <div className="flex min-w-0 items-start gap-3">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-muted">
+              <Boxes className="text-muted-foreground size-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-center gap-2">
+                <CardTitle className="truncate text-base">
+                  {project.name}
+                </CardTitle>
+                <ProjectStatusDot
+                  hasFailure={project.hasFailure}
+                  isProvisioning={project.isProvisioning}
+                />
+              </div>
+              <p className="text-muted-foreground inline-flex items-center gap-1.5 truncate text-xs">
+                <Hash className="size-3" />
+                <span className="truncate font-mono">{project.slug}</span>
+              </p>
+            </div>
+          </div>
+        </CardHeader>
+        <CardFooter className="flex-wrap justify-start gap-2">
+          <Chip
+            icon={<Boxes className="size-3.5" />}
+            label={`${serviceCount} ${serviceCount === 1 ? "service" : "services"}`}
+          />
+          <Chip
+            icon={<Database className="size-3.5" />}
+            label={project.databaseCount.toString()}
+            tooltip="Databases"
+          />
+          <Chip
+            icon={<Workflow className="size-3.5" />}
+            label={project.workloadCount.toString()}
+            tooltip="Workloads"
+          />
+          <Chip
+            icon={<GitBranch className="size-3.5" />}
+            label={project.branchCount.toString()}
+            tooltip="Branches"
+          />
+          <span className="text-muted-foreground group-hover:text-foreground ml-auto inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors">
+            Open
+            <ArrowUpRight className="size-3.5" />
+          </span>
+        </CardFooter>
+      </Card>
+    </a>
+  );
+}
+
+function Chip({
+  icon,
+  label,
+  tooltip,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  tooltip?: string;
+}) {
+  return (
+    <span
+      className="text-muted-foreground inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs"
+      title={tooltip}
+    >
+      {icon}
+      {label}
+    </span>
+  );
+}
+
+function ProjectStatusDot({
+  hasFailure,
+  isProvisioning,
+}: {
+  hasFailure: boolean;
+  isProvisioning: boolean;
+}) {
+  if (hasFailure) {
+    return (
+      <span
+        aria-label="One or more services failed"
+        className="text-destructive inline-flex items-center gap-1 text-xs"
+        title="One or more services failed"
+      >
+        <AlertCircle className="size-3.5" />
+      </span>
+    );
+  }
+
+  if (isProvisioning) {
+    return (
+      <span
+        aria-label="Provisioning"
+        className={cn(
+          "inline-block size-2 shrink-0 rounded-full bg-amber-500",
+          "animate-pulse",
+        )}
+        title="Provisioning"
+      />
+    );
+  }
+
+  return (
+    <span
+      aria-label="Healthy"
+      className="inline-block size-2 shrink-0 rounded-full bg-emerald-500"
+      title="Healthy"
+    />
   );
 }
 

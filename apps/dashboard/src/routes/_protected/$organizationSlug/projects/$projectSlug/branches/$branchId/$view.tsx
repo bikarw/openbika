@@ -1,22 +1,45 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
-import { ProjectWorkspace } from '#/components/project-workspace'
+import { resolveDatabaseIdForBranch } from "#/lib/branch-database-route";
 
 export const Route = createFileRoute(
-  '/_protected/$organizationSlug/projects/$projectSlug/branches/$branchId/$view',
+  "/_protected/$organizationSlug/projects/$projectSlug/branches/$branchId/$view",
 )({
-  component: ProjectBranchRoutePage,
-})
+  beforeLoad: async ({ params }) => {
+    let view =
+      typeof params.view === "string" ? params.view.toLowerCase() : "overview";
+    if (!["overview", "sql", "tables"].includes(view)) {
+      view = "overview";
+    }
 
-function ProjectBranchRoutePage() {
-  const { branchId, organizationSlug, projectSlug, view } = Route.useParams()
+    const databaseId = await resolveDatabaseIdForBranch(
+      params.organizationSlug,
+      params.projectSlug,
+      params.branchId,
+    );
 
-  return (
-    <ProjectWorkspace
-      branchId={branchId}
-      organizationSlug={organizationSlug}
-      projectSlug={projectSlug}
-      view={view === 'sql' || view === 'tables' ? view : 'overview'}
-    />
-  )
-}
+    if (!databaseId) {
+      throw redirect({
+        params: {
+          organizationSlug: params.organizationSlug,
+          projectSlug: params.projectSlug,
+        },
+        search: {},
+        to: "/$organizationSlug/projects/$projectSlug/databases",
+      });
+    }
+
+    throw redirect({
+      params: {
+        branchId: params.branchId,
+        databaseId,
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        view,
+      },
+      search: {},
+      to: "/$organizationSlug/projects/$projectSlug/databases/$databaseId/branches/$branchId/$view",
+    });
+  },
+  component: () => null,
+});

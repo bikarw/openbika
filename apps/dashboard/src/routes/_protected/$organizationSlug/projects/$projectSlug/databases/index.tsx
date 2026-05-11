@@ -3,7 +3,7 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 import { ProjectWorkspace } from "#/components/project-workspace";
 
 export const Route = createFileRoute(
-  "/_protected/$organizationSlug/projects/$projectSlug/branches/",
+  "/_protected/$organizationSlug/projects/$projectSlug/databases/",
 )({
   validateSearch: (raw: Record<string, unknown>): { databaseId?: string } => ({
     databaseId:
@@ -21,20 +21,20 @@ export const Route = createFileRoute(
         projectSlug: params.projectSlug,
       },
       search: {},
-      to: "/$organizationSlug/projects/$projectSlug/databases/$databaseId/",
+      to: "/$organizationSlug/projects/$projectSlug/databases/$databaseId",
     });
   },
-  component: ProjectBranchesRoutePage,
+  component: ProjectDatabasesRoutePage,
 });
 
-function ProjectBranchesRoutePage() {
+function ProjectDatabasesRoutePage() {
   const { organizationSlug, projectSlug } = Route.useParams();
 
   return (
     <ProjectWorkspace
       organizationSlug={organizationSlug}
       projectSlug={projectSlug}
-      view="branches"
+      view="databases"
     />
   );
 }

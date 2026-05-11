@@ -4,7 +4,7 @@ import type {
   BranchCopyMode,
   BranchStatus,
   ClusterStatus,
-  PlanKind,
+  WorkloadStatus,
 } from "@openbika/contracts";
 
 export type EntityPrefix =
@@ -15,7 +15,8 @@ export type EntityPrefix =
   | "br"
   | "ep"
   | "bkp"
-  | "rst";
+  | "rst"
+  | "wkl";
 
 const prefixMap = {
   backup_job: "bkp",
@@ -25,6 +26,7 @@ const prefixMap = {
   membership: "mem",
   organization: "org",
   project: "prj",
+  project_workload: "wkl",
   restore_job: "rst",
 } as const satisfies Record<string, EntityPrefix>;
 
@@ -61,7 +63,6 @@ export interface DatabaseClusterRef {
   id: string;
   projectId: string;
   name: string;
-  plan: PlanKind;
   status: ClusterStatus;
   postgresVersion: string;
 }
@@ -77,6 +78,24 @@ export interface BranchRef {
 }
 
 export function isTerminalClusterStatus(status: ClusterStatus): boolean {
+  switch (status) {
+    case "available":
+    case "degraded":
+    case "failed":
+    case "deleted":
+      return true;
+    case "requested":
+    case "provisioning":
+    case "maintenance":
+      return false;
+    default: {
+      const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
+}
+
+export function isTerminalWorkloadStatus(status: WorkloadStatus): boolean {
   switch (status) {
     case "available":
     case "degraded":

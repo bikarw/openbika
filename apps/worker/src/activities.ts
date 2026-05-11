@@ -3,6 +3,7 @@ import type {
   CloneBranchInput,
   CreateBackupInput,
   ProvisionClusterInput,
+  ProvisionWorkloadInput,
   RestoreBackupInput,
   RotateCredentialsInput,
 } from "@openbika/contracts";
@@ -15,6 +16,7 @@ import {
   type DataPlaneProvider,
   LocalDataPlaneProvider,
   type ProvisionedCluster,
+  type ProvisionedWorkload,
   type RestoreResult,
   type RotatedCredentials,
 } from "@openbika/provisioning";
@@ -102,10 +104,15 @@ async function terminateLocalDatabaseConnections(databaseName: string) {
 
 async function ensureLocalBranchDatabase(branchId: string) {
   const { databaseName, password, username } = localBranchCredentials(branchId);
+  const lockKey = `openbika:branch:${branchId}`;
   const pool = createPool(env.DATABASE_URL);
   const client = await pool.connect();
+  let acquiredLock = false;
 
   try {
+    await client.query("select pg_advisory_lock(hashtext($1))", [lockKey]);
+    acquiredLock = true;
+
     const roleExists = await client.query<{ exists: boolean }>(
       "select exists(select 1 from pg_roles where rolname = $1)",
       [username],
@@ -138,6 +145,11 @@ async function ensureLocalBranchDatabase(branchId: string) {
       );
     }
   } finally {
+    if (acquiredLock) {
+      await client
+        .query("select pg_advisory_unlock(hashtext($1))", [lockKey])
+        .catch(() => undefined);
+    }
     client.release();
     await pool.end();
   }
@@ -451,6 +463,77 @@ export async function provisionClusterActivity(
         updatedAt: new Date(),
       })
       .where(eq(schema.databaseClusters.id, input.clusterId));
+
+    throw error;
+  }
+}
+
+export async function provisionWorkloadActivity(
+  input: ProvisionWorkloadInput,
+): Promise<ProvisionedWorkload> {
+  Context.current().log.info("Provisioning workload", {
+    kind: input.kind,
+    provider: input.provider,
+    workloadId: input.workloadId,
+  });
+
+  await db
+    .update(schema.projectWorkloads)
+    .set({
+      status: "provisioning",
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.projectWorkloads.id, input.workloadId));
+
+  try {
+    const result = await provider.provisionWorkload(input);
+    const existing = (
+      await db
+        .select({ observedState: schema.projectWorkloads.observedState })
+        .from(schema.projectWorkloads)
+        .where(eq(schema.projectWorkloads.id, input.workloadId))
+        .limit(1)
+    )[0];
+    const previous = existing?.observedState ?? {};
+
+    await db
+      .update(schema.projectWorkloads)
+      .set({
+        observedState: {
+          ...previous,
+          error: undefined,
+          providerResourceId: result.providerResourceId,
+          ...(result.publicBaseUrl
+            ? { publicBaseUrl: result.publicBaseUrl }
+            : {}),
+        },
+        status: "available",
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.projectWorkloads.id, input.workloadId));
+
+    return result;
+  } catch (error) {
+    const existing = (
+      await db
+        .select({ observedState: schema.projectWorkloads.observedState })
+        .from(schema.projectWorkloads)
+        .where(eq(schema.projectWorkloads.id, input.workloadId))
+        .limit(1)
+    )[0];
+    const previous = existing?.observedState ?? {};
+
+    await db
+      .update(schema.projectWorkloads)
+      .set({
+        observedState: {
+          ...previous,
+          error: errorMessage(error),
+        },
+        status: "failed",
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.projectWorkloads.id, input.workloadId));
 
     throw error;
   }

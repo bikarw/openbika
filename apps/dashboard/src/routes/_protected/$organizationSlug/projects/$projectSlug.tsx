@@ -1,4 +1,4 @@
-import { createFileRoute, useRouterState } from '@tanstack/react-router'
+import { createFileRoute, Outlet, useRouterState } from '@tanstack/react-router'
 
 import { ProjectWorkspace } from '#/components/project-workspace'
 
@@ -13,26 +13,27 @@ function ProjectRoutePage() {
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })
-  const pathParts = pathname.split('/').filter(Boolean)
-  const branchesIndex = pathParts.indexOf('branches')
-  const branchId =
-    branchesIndex === -1 ? undefined : pathParts[branchesIndex + 1]
-  const branchView = branchesIndex === -1 ? undefined : pathParts[branchesIndex + 2]
-  const view =
-    branchesIndex === -1
-      ? 'dashboard'
-      : branchId && (branchView === 'sql' || branchView === 'tables')
-        ? branchView
-        : branchId
-          ? 'overview'
-          : 'branches'
+
+  // Child routes (services / databases / workloads / branches) own their
+  // own rendering via the Outlet below. This branch only handles the
+  // exact `/projects/$projectSlug` URL with the dashboard view.
+  const projectSlugMatch = `/projects/${projectSlug}`
+  const projectSlugIndex = pathname.indexOf(projectSlugMatch)
+  const remainder =
+    projectSlugIndex === -1
+      ? ''
+      : pathname.slice(projectSlugIndex + projectSlugMatch.length)
+  const isProjectIndex = remainder === '' || remainder === '/'
+
+  if (!isProjectIndex) {
+    return <Outlet />
+  }
 
   return (
     <ProjectWorkspace
-      branchId={branchId}
       organizationSlug={organizationSlug}
       projectSlug={projectSlug}
-      view={view}
+      view="dashboard"
     />
   )
 }
