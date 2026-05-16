@@ -18,7 +18,10 @@ export const Route = createFileRoute(
   parseParams: (raw: Record<string, string>) => {
     const lowered = typeof raw.view === "string" ? raw.view.toLowerCase() : "overview";
     const view =
-      lowered === "sql" || lowered === "tables" || lowered === "overview"
+      lowered === "sql" ||
+      lowered === "tables" ||
+      lowered === "settings" ||
+      lowered === "overview"
         ? lowered
         : "overview";
 

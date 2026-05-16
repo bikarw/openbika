@@ -292,6 +292,9 @@ export const branches = pgTable(
     parentBranchId: text("parent_branch_id"),
     copyMode: branchCopyMode("copy_mode").notNull().default("schema_only"),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
+    internetAccessEnabled: boolean("internet_access_enabled")
+      .default(false)
+      .notNull(),
     name: text("name").notNull(),
     status: branchStatus("status").notNull().default("requested"),
     ...timestamps,

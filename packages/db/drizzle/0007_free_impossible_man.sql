@@ -1,0 +1,1 @@
+ALTER TABLE "branches" ADD COLUMN "internet_access_enabled" boolean DEFAULT false NOT NULL;

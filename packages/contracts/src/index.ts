@@ -176,7 +176,12 @@ export const branchConnectionResponseSchema = z.object({
   connectionString: z.string(),
   databaseId: idSchema,
   databaseName: z.string(),
+  internalConnectionString: z.string(),
+  internetAccessEnabled: z.boolean(),
   maskedConnectionString: z.string(),
+  maskedInternalConnectionString: z.string(),
+  maskedPublicConnectionString: z.string().nullable(),
+  publicConnectionString: z.string().nullable(),
   username: z.string(),
 });
 export type BranchConnectionResponse = z.infer<
@@ -243,6 +248,7 @@ export const branchResponseSchema = z.object({
   copyMode: branchCopyModeSchema,
   expiresAt: z.string().nullable(),
   id: idSchema,
+  internetAccessEnabled: z.boolean(),
   name: z.string(),
   parentBranchId: idSchema.nullable(),
   status: branchStatusSchema,
@@ -886,6 +892,13 @@ export const createBranchRequestSchema = z.object({
   parentBranchId: idSchema.optional(),
 });
 export type CreateBranchRequest = z.infer<typeof createBranchRequestSchema>;
+
+export const patchBranchSettingsRequestSchema = z.object({
+  internetAccessEnabled: z.boolean(),
+});
+export type PatchBranchSettingsRequest = z.infer<
+  typeof patchBranchSettingsRequestSchema
+>;
 
 export const backupJobResponseSchema = z.object({
   artifactUri: z.string().nullable(),

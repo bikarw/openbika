@@ -43,6 +43,13 @@
       "when": 1778935728897,
       "tag": "0006_sloppy_sentinels",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1778967152245,
+      "tag": "0007_free_impossible_man",
+      "breakpoints": true
     }
   ]
 }

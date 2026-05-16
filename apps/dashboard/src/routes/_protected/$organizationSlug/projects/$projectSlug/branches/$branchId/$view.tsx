@@ -8,7 +8,7 @@ export const Route = createFileRoute(
   beforeLoad: async ({ context, params }) => {
     let view =
       typeof params.view === "string" ? params.view.toLowerCase() : "overview";
-    if (!["overview", "sql", "tables"].includes(view)) {
+    if (!["overview", "settings", "sql", "tables"].includes(view)) {
       view = "overview";
     }
 

@@ -13,6 +13,7 @@ import {
   normalizeIngressFreeDnsZone,
   normalizeServerDomainHost,
   parseIngressEmbeddedPublicIpv4,
+  patchBranchSettingsRequestSchema,
   patchServerDomainSettingsRequestSchema,
   patchWorkloadIngressDomainsRequestSchema,
   patchWorkloadEnvRequestSchema,
@@ -67,6 +68,12 @@ const readOnlySqlTokens = new Set(["explain", "select", "show", "with"]);
 const systemSchemas = ["information_schema", "pg_catalog"];
 
 interface BranchConnectionDetails {
+  databaseName: string;
+  password: string;
+  username: string;
+}
+
+interface BranchRuntimeConnectionDetails {
   connectionString: string;
   databaseName: string;
   username: string;
@@ -101,6 +108,7 @@ interface SerializableBranch {
   copyMode: (typeof schema.branches.$inferSelect)["copyMode"];
   expiresAt: Date | null;
   id: string;
+  internetAccessEnabled: boolean;
   name: string;
   parentBranchId: string | null;
   status: (typeof schema.branches.$inferSelect)["status"];
@@ -574,26 +582,88 @@ function branchExpirationFromTtl(ttl: BranchExpirationTtl | undefined) {
 
 function buildBranchConnectionString({
   databaseName,
-  endpoint,
+  hostname,
   password,
+  port,
   revealPassword,
   username,
 }: {
   databaseName: string;
-  endpoint: typeof schema.endpoints.$inferSelect;
+  hostname: string;
   password: string;
+  port: number;
   revealPassword: boolean;
   username: string;
 }) {
   const renderedPassword = revealPassword ? password : "********";
-  const hostname = isLocalEndpointHostname(endpoint.hostname)
-    ? "localhost"
-    : endpoint.hostname;
   const authority = `${encodeURIComponent(username)}:${encodeURIComponent(
     renderedPassword,
-  )}@${hostname}:${endpoint.port}`;
+  )}@${hostname}:${port}`;
 
   return `postgresql://${authority}/${encodeURIComponent(databaseName)}`;
+}
+
+function publicBranchEndpointHostname({
+  branch,
+  endpoint,
+  env,
+}: {
+  branch: typeof schema.branches.$inferSelect;
+  endpoint: typeof schema.endpoints.$inferSelect;
+  env: ApiEnv;
+}) {
+  if (!isLocalEndpointHostname(endpoint.hostname)) {
+    return endpoint.hostname;
+  }
+
+  const freeDnsZone = normalizeIngressFreeDnsZone(
+    env.OPENBIKA_INGRESS_FREE_DNS_ZONE,
+  );
+  const embeddedIp = parseIngressEmbeddedPublicIpv4(
+    env.OPENBIKA_INGRESS_PUBLIC_IPV4 ?? "",
+  );
+
+  if (freeDnsZone !== null && embeddedIp !== null) {
+    return suggestWorkloadEmbeddedIpIngressHostname(
+      branch.id,
+      embeddedIp,
+      freeDnsZone,
+    );
+  }
+
+  const publicBaseDomain =
+    env.OPENBIKA_EDGE_PUBLIC_BASE_DOMAIN?.trim() ||
+    env.OPENBIKA_PUBLIC_BASE_DOMAIN?.trim();
+
+  if (publicBaseDomain) {
+    return suggestWorkloadEdgeHostname(branch.id, publicBaseDomain);
+  }
+
+  const apiPublicHostname = new URL(env.API_PUBLIC_URL).hostname;
+  return isLocalEndpointHostname(apiPublicHostname) ? null : apiPublicHostname;
+}
+
+function internalBranchEndpointHostname({
+  controlDatabaseUrl,
+  endpoint,
+}: {
+  controlDatabaseUrl: string;
+  endpoint: typeof schema.endpoints.$inferSelect;
+}) {
+  if (!isLocalEndpointHostname(endpoint.hostname)) {
+    return endpoint.hostname;
+  }
+
+  try {
+    const hostname = new URL(controlDatabaseUrl).hostname;
+    if (hostname && !isLocalEndpointHostname(hostname)) {
+      return hostname;
+    }
+  } catch {
+    return "postgres";
+  }
+
+  return "postgres";
 }
 
 function localBranchDatabaseName(branchId: string) {
@@ -762,7 +832,7 @@ async function resolveBranchRuntimeConnection({
   controlDatabaseUrl: string;
   database: typeof schema.databaseClusters.$inferSelect;
   endpoint: typeof schema.endpoints.$inferSelect;
-}): Promise<BranchConnectionDetails> {
+}): Promise<BranchRuntimeConnectionDetails> {
   const connectionDetails = await resolveBranchConnectionDetails({
     branch,
     controlDatabaseUrl,
@@ -773,8 +843,11 @@ async function resolveBranchRuntimeConnection({
   return {
     connectionString: buildBranchConnectionString({
       databaseName: connectionDetails.databaseName,
-      endpoint,
+      hostname: isLocalEndpointHostname(endpoint.hostname)
+        ? "localhost"
+        : endpoint.hostname,
       password: connectionDetails.password,
+      port: endpoint.port,
       revealPassword: true,
       username: connectionDetails.username,
     }),
@@ -1017,6 +1090,7 @@ function serializeBranch(branch: SerializableBranch): BranchResponse {
     copyMode: branch.copyMode,
     expiresAt: serializeNullableDate(branch.expiresAt),
     id: branch.id,
+    internetAccessEnabled: branch.internetAccessEnabled,
     name: branch.name,
     parentBranchId: branch.parentBranchId,
     status: branch.status,
@@ -2119,28 +2193,103 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       database,
       endpoint: fallbackEndpoint,
     });
+    const internalHostname = internalBranchEndpointHostname({
+      controlDatabaseUrl: env.DATABASE_URL,
+      endpoint: fallbackEndpoint,
+    });
+    const publicHostname = branch.internetAccessEnabled
+      ? publicBranchEndpointHostname({
+          branch,
+          endpoint: fallbackEndpoint,
+          env,
+        })
+      : null;
+    const internalConnectionString = buildBranchConnectionString({
+      databaseName: connectionDetails.databaseName,
+      hostname: internalHostname,
+      password: connectionDetails.password,
+      port: fallbackEndpoint.port,
+      revealPassword: true,
+      username: connectionDetails.username,
+    });
+    const maskedInternalConnectionString = buildBranchConnectionString({
+      databaseName: connectionDetails.databaseName,
+      hostname: internalHostname,
+      password: connectionDetails.password,
+      port: fallbackEndpoint.port,
+      revealPassword: false,
+      username: connectionDetails.username,
+    });
+    const publicConnectionString =
+      publicHostname === null
+        ? null
+        : buildBranchConnectionString({
+            databaseName: connectionDetails.databaseName,
+            hostname: publicHostname,
+            password: connectionDetails.password,
+            port: fallbackEndpoint.port,
+            revealPassword: true,
+            username: connectionDetails.username,
+          });
+    const maskedPublicConnectionString =
+      publicHostname === null
+        ? null
+        : buildBranchConnectionString({
+            databaseName: connectionDetails.databaseName,
+            hostname: publicHostname,
+            password: connectionDetails.password,
+            port: fallbackEndpoint.port,
+            revealPassword: false,
+            username: connectionDetails.username,
+          });
     const connection = branchConnectionResponseSchema.parse({
       branchId: branch.id,
-      connectionString: buildBranchConnectionString({
-        databaseName: connectionDetails.databaseName,
-        endpoint: fallbackEndpoint,
-        password: connectionDetails.password,
-        revealPassword: true,
-        username: connectionDetails.username,
-      }),
+      connectionString: publicConnectionString ?? internalConnectionString,
       databaseId: database.id,
       databaseName: connectionDetails.databaseName,
-      maskedConnectionString: buildBranchConnectionString({
-        databaseName: connectionDetails.databaseName,
-        endpoint: fallbackEndpoint,
-        password: connectionDetails.password,
-        revealPassword: false,
-        username: connectionDetails.username,
-      }),
+      internalConnectionString,
+      internetAccessEnabled: branch.internetAccessEnabled,
+      maskedConnectionString:
+        maskedPublicConnectionString ?? maskedInternalConnectionString,
+      maskedInternalConnectionString,
+      maskedPublicConnectionString,
+      publicConnectionString,
       username: connectionDetails.username,
     });
 
     return c.json({ connection });
+  });
+
+  routes.patch("/branches/:branchId/settings", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const { branch } = await assertBranchAccess({
+      branchId: c.req.param("branchId"),
+      db,
+      userId: user.id,
+    });
+    const input = await parseJson(c, patchBranchSettingsRequestSchema);
+
+    const updatedBranch = first(
+      await db
+        .update(schema.branches)
+        .set({
+          internetAccessEnabled: input.internetAccessEnabled,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.branches.id, branch.id))
+        .returning(),
+    );
+
+    if (!updatedBranch) {
+      throw new HTTPException(500, {
+        message: "Branch settings could not be saved",
+      });
+    }
+
+    return c.json({
+      branch: serializeBranch(updatedBranch),
+    });
   });
 
   routes.get("/branches/:branchId/schema", async (c) => {
@@ -2263,6 +2412,7 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       copyMode: parentBranch ? input.copyMode : "schema_only",
       expiresAt,
       id: createId("branch"),
+      internetAccessEnabled: false,
       name: input.name,
       parentBranchId: input.parentBranchId ?? null,
       status: parentBranch ? ("creating" as const) : ("ready" as const),

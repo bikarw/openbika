@@ -3,6 +3,7 @@ import type {
   CreateDatabaseRequest,
   CreateProjectRequest,
   CreateWorkloadRequest,
+  PatchBranchSettingsRequest,
   PatchServerDomainSettingsRequest,
   PatchWorkloadEnvRequest,
   PatchWorkloadIngressDomainsRequest,
@@ -90,6 +91,13 @@ export async function fetchBranchSchema(branchId: string) {
 
 export async function fetchBranchConnection(branchId: string) {
   return getDashboardApiClient().getBranchConnection(branchId);
+}
+
+export async function patchBranchSettingsRequest(
+  branchId: string,
+  input: PatchBranchSettingsRequest,
+) {
+  return getDashboardApiClient().patchBranchSettings(branchId, input);
 }
 
 export async function fetchWorkloadRuntimeLogs(

@@ -22,6 +22,7 @@ import {
   healthResponseSchema,
   type OrganizationResponse,
   organizationResponseSchema,
+  type PatchBranchSettingsRequest,
   type ProjectResponse,
   type PatchWorkloadEnvRequest,
   type PatchWorkloadIngressDomainsRequest,
@@ -348,6 +349,18 @@ export class OpenbikaClient {
       parse: (body) =>
         branchConnectionResponseSchema.parse(readProperty(body, "connection")),
       path: `/v1/branches/${encodeURIComponent(branchId)}/connection`,
+    });
+  }
+
+  async patchBranchSettings(
+    branchId: string,
+    input: PatchBranchSettingsRequest,
+  ): Promise<BranchResponse> {
+    return this.request({
+      body: input,
+      method: "PATCH",
+      parse: (body) => branchResponseSchema.parse(readProperty(body, "branch")),
+      path: `/v1/branches/${encodeURIComponent(branchId)}/settings`,
     });
   }
 

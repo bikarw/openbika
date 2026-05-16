@@ -18,6 +18,7 @@ import type {
   CreateWorkloadRequest,
   DatabaseResponse,
   OrganizationResponse,
+  PatchBranchSettingsRequest,
   ProjectResponse,
   WorkloadResponse,
 } from "@openbika/contracts";
@@ -62,11 +63,13 @@ import {
   Eye,
   EyeOff,
   GitBranch,
+  Globe,
   Hash,
   LayoutDashboard,
   LogOut,
   Plus,
   RotateCcw,
+  Settings,
   Table2,
   Workflow,
   X,
@@ -104,6 +107,7 @@ import {
   fetchProjects,
   fetchWorkload,
   fetchWorkloads,
+  patchBranchSettingsRequest,
   rebuildWorkloadRequest,
 } from "#/lib/dashboard-api-queries";
 import {
@@ -137,6 +141,10 @@ export interface ProjectWorkspaceOutletContext {
     name: string;
     parentBranchId?: string;
   }) => Promise<void>;
+  onPatchBranchSettings: (
+    branchId: string,
+    input: PatchBranchSettingsRequest,
+  ) => Promise<void>;
   organizationSlug: string;
   projectSlug: string;
   refreshWorkloads: () => Promise<void>;
@@ -586,6 +594,34 @@ export function ProjectWorkspace({
     });
   }
 
+  async function handlePatchBranchSettings(
+    branchId: string,
+    input: PatchBranchSettingsRequest,
+  ) {
+    if (!projectId) {
+      throw new Error("Project is not loaded yet.");
+    }
+
+    const branch = await patchBranchSettingsRequest(branchId, input);
+
+    queryClient.setQueryData(
+      dashboardKeys.databases(projectId),
+      (old: DatabaseResponse[] | undefined) => {
+        if (!old) return old;
+        return old.map((database) => ({
+          ...database,
+          branches: database.branches.map((row) =>
+            row.id === branch.id ? branch : row,
+          ),
+        }));
+      },
+    );
+
+    queryClient.removeQueries({
+      queryKey: dashboardKeys.branchConnection(branch.id),
+    });
+  }
+
   async function handleSignOut() {
     await authClient.signOut();
     queryClient.clear();
@@ -608,6 +644,7 @@ export function ProjectWorkspace({
     branches,
     databases,
     onCreateBranch: handleCreateBranch,
+    onPatchBranchSettings: handlePatchBranchSettings,
     organizationSlug,
     projectSlug,
     refreshWorkloads,
@@ -1105,6 +1142,8 @@ function WorkspaceDatabaseTabs({
   const isSqlActive = studioBranchId !== null && studioViewRaw === "sql";
   const isTablesActive =
     studioBranchId !== null && studioViewRaw === "tables";
+  const isSettingsActive =
+    studioBranchId !== null && studioViewRaw === "settings";
 
   return (
     <nav
@@ -1137,6 +1176,16 @@ function WorkspaceDatabaseTabs({
         />
       ) : (
         <InsetTabMuted label="Tables" />
+      )}
+      {studioParams ? (
+        <InsetTabLink
+          active={isSettingsActive}
+          label="Settings"
+          params={{ ...studioParams, view: "settings" }}
+          to="/$organizationSlug/projects/$projectSlug/databases/$databaseId/branches/$branchId/$view"
+        />
+      ) : (
+        <InsetTabMuted label="Settings" />
       )}
       <InsetTabLink
         active={isLogs}
@@ -1177,7 +1226,8 @@ function WorkspaceDatabaseBreadcrumbBranchSwitch({
     ? pathname.slice(branchesPrefix.length).replace(/\/$/u, "")
     : "";
 
-  let studioNavigateView: "overview" | "sql" | "tables" = "overview";
+  let studioNavigateView: "overview" | "settings" | "sql" | "tables" =
+    "overview";
   let urlBranchId: string | null = null;
 
   if (branchStudioTail.length > 0) {
@@ -1187,6 +1237,7 @@ function WorkspaceDatabaseBreadcrumbBranchSwitch({
       if (
         typeof id === "string" &&
         (rawView === "overview" ||
+          rawView === "settings" ||
           rawView === "sql" ||
           rawView === "tables")
       ) {
@@ -2364,9 +2415,9 @@ function buildMaskedConnectionString(selectedBranch: WorkspaceBranch | null) {
   const branchToken = selectedBranch.branch.id
     .replace(/^br_/, "")
     .replaceAll("-", "")
-    .slice(0, 12)
+    .slice(-12)
     .toLowerCase();
-  const hostname = isLocalEndpoint ? "localhost" : endpoint.hostname;
+  const hostname = isLocalEndpoint ? "postgres" : endpoint.hostname;
   const databaseName = isLocalEndpoint
     ? `openbika_${branchToken}`
     : selectedBranch.database.name;
@@ -2395,18 +2446,28 @@ function ConnectButton({
   );
   const [revealed, setRevealed] = React.useState(false);
   const [revealing, setRevealing] = React.useState(false);
-  const [copying, setCopying] = React.useState(false);
-  const [copied, setCopied] = React.useState(false);
+  const [copyingConnection, setCopyingConnection] = React.useState<
+    "internal" | "public" | null
+  >(null);
+  const [copiedConnection, setCopiedConnection] = React.useState<
+    "internal" | "public" | null
+  >(null);
   const modalBranch =
     branches.find((item) => item.branch.id === modalBranchId) ??
     selectedBranch ??
     null;
-  const maskedConnectionString =
-    connection?.maskedConnectionString ??
+  const maskedInternalConnectionString =
+    connection?.maskedInternalConnectionString ??
     buildMaskedConnectionString(modalBranch);
-  const connectionString = revealed
-    ? (connection?.connectionString ?? maskedConnectionString)
-    : maskedConnectionString;
+  const internalConnectionString = revealed
+    ? (connection?.internalConnectionString ?? maskedInternalConnectionString)
+    : maskedInternalConnectionString;
+  const publicConnectionString =
+    connection?.internetAccessEnabled === true
+      ? revealed
+        ? connection.publicConnectionString
+        : connection.maskedPublicConnectionString
+      : null;
 
   React.useEffect(() => {
     setModalBranchId(selectedBranch?.branch.id ?? "");
@@ -2417,14 +2478,14 @@ function ConnectButton({
     setConnectionError(null);
     setRevealed(false);
     setRevealing(false);
-    setCopying(false);
-    setCopied(false);
+    setCopyingConnection(null);
+    setCopiedConnection(null);
     setShowConnection(false);
   }, [modalBranchId]);
 
-  async function loadConnectionString() {
+  async function loadConnectionDetails() {
     if (!modalBranch) return null;
-    if (connection?.connectionString) return connection.connectionString;
+    if (connection) return connection;
 
     setRevealing(true);
     setConnectionError(null);
@@ -2435,7 +2496,7 @@ function ConnectButton({
         queryFn: () => fetchBranchConnection(modalBranch.branch.id),
       });
       setConnection(nextConnection);
-      return nextConnection.connectionString;
+      return nextConnection;
     } catch (err) {
       setConnectionError(
         err instanceof Error ? err.message : "Failed to load connection string",
@@ -2446,6 +2507,20 @@ function ConnectButton({
     }
   }
 
+  async function loadConnectionString(kind: "internal" | "public") {
+    const nextConnection = await loadConnectionDetails();
+    if (!nextConnection) return null;
+
+    return kind === "public"
+      ? nextConnection.publicConnectionString
+      : nextConnection.internalConnectionString;
+  }
+
+  async function handleShowConnection() {
+    setShowConnection(true);
+    await loadConnectionDetails();
+  }
+
   async function handleToggleReveal() {
     if (!modalBranch) return;
 
@@ -2454,33 +2529,33 @@ function ConnectButton({
       return;
     }
 
-    const nextConnectionString = await loadConnectionString();
-    if (!nextConnectionString) return;
+    const nextConnection = await loadConnectionDetails();
+    if (!nextConnection) return;
 
     setRevealed(true);
   }
 
-  async function handleCopyConnection() {
+  async function handleCopyConnection(kind: "internal" | "public") {
     if (!modalBranch) return;
 
-    setCopying(true);
-    setCopied(false);
+    setCopyingConnection(kind);
+    setCopiedConnection(null);
     setConnectionError(null);
 
     try {
-      const nextConnectionString = await loadConnectionString();
+      const nextConnectionString = await loadConnectionString(kind);
       if (!nextConnectionString) return;
 
       await navigator.clipboard.writeText(nextConnectionString);
       setRevealed(true);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
+      setCopiedConnection(kind);
+      window.setTimeout(() => setCopiedConnection(null), 1500);
     } catch (err) {
       setConnectionError(
         err instanceof Error ? err.message : "Failed to copy connection string",
       );
     } finally {
-      setCopying(false);
+      setCopyingConnection(null);
     }
   }
 
@@ -2582,7 +2657,7 @@ function ConnectButton({
               {!showConnection ? (
                 <Button
                   disabled={!modalBranch}
-                  onClick={() => setShowConnection(true)}
+                  onClick={() => void handleShowConnection()}
                   type="button"
                   variant="secondary"
                 >
@@ -2590,14 +2665,35 @@ function ConnectButton({
                 </Button>
               ) : (
                 <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-3">
-                  <p className="text-sm font-medium">Connection string</p>
-                  <code className="block overflow-x-auto rounded-lg border border-border bg-background p-3 text-sm">
-                    {connectionString}
-                  </code>
-                  <div className="flex justify-end gap-2">
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">
+                      Internal connection string
+                    </p>
+                    <code className="block overflow-x-auto rounded-lg border border-border bg-background p-3 text-sm">
+                      {internalConnectionString}
+                    </code>
+                  </div>
+                  {publicConnectionString ? (
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium">
+                        Public connection string
+                      </p>
+                      <code className="block overflow-x-auto rounded-lg border border-border bg-background p-3 text-sm">
+                        {publicConnectionString}
+                      </code>
+                    </div>
+                  ) : connection?.internetAccessEnabled ? (
+                    <p className="text-muted-foreground text-sm">
+                      Internet access is enabled, but no public database
+                      hostname is configured yet.
+                    </p>
+                  ) : null}
+                  <div className="flex flex-wrap justify-end gap-2">
                     <Button
                       aria-label={revealed ? "Hide password" : "Show password"}
-                      disabled={!modalBranch || revealing || copying}
+                      disabled={
+                        !modalBranch || revealing || copyingConnection !== null
+                      }
                       onClick={() => void handleToggleReveal()}
                       size="icon-sm"
                       title={revealed ? "Hide password" : "Show password"}
@@ -2611,20 +2707,45 @@ function ConnectButton({
                       )}
                     </Button>
                     <Button
-                      aria-label="Copy connection string"
-                      disabled={!modalBranch || revealing || copying}
-                      onClick={() => void handleCopyConnection()}
-                      size="icon-sm"
-                      title="Copy connection string"
+                      aria-label="Copy internal connection string"
+                      disabled={
+                        !modalBranch || revealing || copyingConnection !== null
+                      }
+                      onClick={() => void handleCopyConnection("internal")}
+                      size="sm"
+                      title="Copy internal connection string"
                       type="button"
                       variant="outline"
                     >
-                      {copied ? (
+                      {copiedConnection === "internal" ? (
                         <Check className="size-4" />
                       ) : (
                         <Copy className="size-4" />
                       )}
+                      Internal
                     </Button>
+                    {publicConnectionString ? (
+                      <Button
+                        aria-label="Copy public connection string"
+                        disabled={
+                          !modalBranch ||
+                          revealing ||
+                          copyingConnection !== null
+                        }
+                        onClick={() => void handleCopyConnection("public")}
+                        size="sm"
+                        title="Copy public connection string"
+                        type="button"
+                        variant="outline"
+                      >
+                        {copiedConnection === "public" ? (
+                          <Check className="size-4" />
+                        ) : (
+                          <Copy className="size-4" />
+                        )}
+                        Public
+                      </Button>
+                    ) : null}
                   </div>
                   {connectionError ? (
                     <p className="text-destructive text-sm" role="alert">
@@ -3580,7 +3701,7 @@ function ProjectBranches({
 interface BranchWorkspaceViewProps {
   branches: WorkspaceBranch[];
   selectedBranch: WorkspaceBranch | null;
-  view: "overview" | "sql" | "tables";
+  view: "overview" | "settings" | "sql" | "tables";
 }
 
 export function BranchWorkspaceView({
@@ -3614,6 +3735,8 @@ export function BranchWorkspaceView({
       return (
         <BranchOverview branches={branches} selectedBranch={selectedBranch} />
       );
+    case "settings":
+      return <BranchSettings selectedBranch={selectedBranch} />;
     case "sql":
       return (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -3639,6 +3762,95 @@ export function BranchWorkspaceView({
       return exhaustive;
     }
   }
+}
+
+function BranchSettings({
+  selectedBranch,
+}: {
+  selectedBranch: WorkspaceBranch;
+}) {
+  const { onPatchBranchSettings } = useProjectWorkspaceOutlet();
+  const [internetAccessEnabled, setInternetAccessEnabled] = React.useState(
+    selectedBranch.branch.internetAccessEnabled,
+  );
+  const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+  const settingsChanged =
+    internetAccessEnabled !== selectedBranch.branch.internetAccessEnabled;
+
+  React.useEffect(() => {
+    setInternetAccessEnabled(selectedBranch.branch.internetAccessEnabled);
+    setErrorMessage(null);
+  }, [selectedBranch.branch.id, selectedBranch.branch.internetAccessEnabled]);
+
+  const saveSettingsMutation = useMutation({
+    mutationFn: () =>
+      onPatchBranchSettings(selectedBranch.branch.id, {
+        internetAccessEnabled,
+      }),
+    onError: (err) => {
+      setErrorMessage(
+        err instanceof Error ? err.message : "Failed to save branch settings",
+      );
+    },
+    onSuccess: () => {
+      setErrorMessage(null);
+    },
+  });
+
+  return (
+    <div className="grid gap-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Settings className="text-muted-foreground size-4" />
+            Branch settings
+          </CardTitle>
+          <CardDescription>
+            Configure how clients can reach this branch.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-5">
+          <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-4">
+            <input
+              checked={internetAccessEnabled}
+              className="mt-1"
+              disabled={saveSettingsMutation.isPending}
+              onChange={(event) =>
+                setInternetAccessEnabled(event.currentTarget.checked)
+              }
+              type="checkbox"
+            />
+            <span className="grid gap-1">
+              <span className="flex items-center gap-2 font-medium text-sm">
+                <Globe className="text-muted-foreground size-4" />
+                Expose this branch to the internet
+              </span>
+              <span className="text-muted-foreground text-sm">
+                When enabled, the Connect modal shows both internal and public
+                connection strings for this branch.
+              </span>
+            </span>
+          </label>
+
+          {errorMessage ? (
+            <p className="text-destructive text-sm" role="alert">
+              {errorMessage}
+            </p>
+          ) : null}
+
+          <div className="flex justify-end">
+            <Button
+              disabled={!settingsChanged || saveSettingsMutation.isPending}
+              onClick={() => saveSettingsMutation.mutate()}
+              type="button"
+            >
+              {saveSettingsMutation.isPending ? "Saving..." : "Save settings"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
 }
 
 function BranchOverview({
