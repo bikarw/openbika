@@ -30,6 +30,56 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error";
 }
 
+type ActivityLogEntry = { at: string; message: string };
+
+const ACTIVITY_LOG_CAP = 200;
+
+function mergeObservedPayload(observed: unknown): Record<string, unknown> {
+  if (observed && typeof observed === "object" && !Array.isArray(observed)) {
+    return { ...(observed as Record<string, unknown>) };
+  }
+  return {};
+}
+
+function normalizeActivityLog(raw: unknown): ActivityLogEntry[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const out: ActivityLogEntry[] = [];
+  for (const item of raw) {
+    if (
+      item &&
+      typeof item === "object" &&
+      !Array.isArray(item) &&
+      "at" in item &&
+      "message" in item &&
+      typeof (item as { at: unknown }).at === "string" &&
+      typeof (item as { message: unknown }).message === "string"
+    ) {
+      out.push({
+        at: (item as ActivityLogEntry).at,
+        message: (item as ActivityLogEntry).message,
+      });
+    }
+  }
+  return out;
+}
+
+function appendActivityLog(
+  observed: Record<string, unknown>,
+  message: string,
+): Record<string, unknown> {
+  const log = [
+    ...normalizeActivityLog(observed.activityLog),
+    { at: new Date().toISOString(), message },
+  ];
+  while (log.length > ACTIVITY_LOG_CAP) {
+    log.shift();
+  }
+  return { ...observed, activityLog: log };
+}
+
 function localBranchToken(branchId: string) {
   return branchId
     .replace(/^br_/, "")
@@ -384,9 +434,21 @@ export async function provisionClusterActivity(
     provider: input.provider,
   });
 
+  const bootstrap = (
+    await db
+      .select({ observedState: schema.databaseClusters.observedState })
+      .from(schema.databaseClusters)
+      .where(eq(schema.databaseClusters.id, input.clusterId))
+      .limit(1)
+  )[0];
+
   await db
     .update(schema.databaseClusters)
     .set({
+      observedState: appendActivityLog(
+        mergeObservedPayload(bootstrap?.observedState),
+        "Cluster provisioning started (control plane)",
+      ),
       status: "provisioning",
       updatedAt: new Date(),
     })
@@ -408,10 +470,27 @@ export async function provisionClusterActivity(
     )[0];
 
     await db.transaction(async (tx) => {
+      const current = (
+        await tx
+          .select({
+            observedState: schema.databaseClusters.observedState,
+          })
+          .from(schema.databaseClusters)
+          .where(eq(schema.databaseClusters.id, input.clusterId))
+          .limit(1)
+      )[0];
+
+      const merged = appendActivityLog(
+        mergeObservedPayload(current?.observedState),
+        `Cluster endpoint ready at ${result.endpoint.hostname}:${result.endpoint.port}`,
+      );
+
       await tx
         .update(schema.databaseClusters)
         .set({
           observedState: {
+            ...merged,
+            error: undefined,
             providerResourceId: result.providerResourceId,
           },
           status: "available",
@@ -453,10 +532,23 @@ export async function provisionClusterActivity(
 
     return result;
   } catch (error) {
+    const current = (
+      await db
+        .select({ observedState: schema.databaseClusters.observedState })
+        .from(schema.databaseClusters)
+        .where(eq(schema.databaseClusters.id, input.clusterId))
+        .limit(1)
+    )[0];
+    const merged = appendActivityLog(
+      mergeObservedPayload(current?.observedState),
+      `Cluster provisioning failed: ${errorMessage(error)}`,
+    );
+
     await db
       .update(schema.databaseClusters)
       .set({
         observedState: {
+          ...merged,
           error: errorMessage(error),
         },
         status: "failed",
@@ -477,9 +569,21 @@ export async function provisionWorkloadActivity(
     workloadId: input.workloadId,
   });
 
+  const bootstrap = (
+    await db
+      .select({ observedState: schema.projectWorkloads.observedState })
+      .from(schema.projectWorkloads)
+      .where(eq(schema.projectWorkloads.id, input.workloadId))
+      .limit(1)
+  )[0];
+
   await db
     .update(schema.projectWorkloads)
     .set({
+      observedState: appendActivityLog(
+        mergeObservedPayload(bootstrap?.observedState),
+        "Workload provisioning started (control plane)",
+      ),
       status: "provisioning",
       updatedAt: new Date(),
     })
@@ -494,19 +598,36 @@ export async function provisionWorkloadActivity(
         .where(eq(schema.projectWorkloads.id, input.workloadId))
         .limit(1)
     )[0];
-    const previous = existing?.observedState ?? {};
+    const previous = mergeObservedPayload(existing?.observedState);
+    const invoked = appendActivityLog(
+      previous,
+      `Invoked data plane provider (${input.provider})`,
+    );
 
     await db
       .update(schema.projectWorkloads)
       .set({
-        observedState: {
-          ...previous,
-          error: undefined,
-          providerResourceId: result.providerResourceId,
-          ...(result.publicBaseUrl
-            ? { publicBaseUrl: result.publicBaseUrl }
-            : {}),
-        },
+        observedState: appendActivityLog(
+          {
+            ...invoked,
+            error: undefined,
+            providerResourceId: result.providerResourceId,
+            ...(Array.isArray(result.ingressRoutes) &&
+            result.ingressRoutes.length > 0
+              ? { ingressRoutes: result.ingressRoutes }
+              : {}),
+            ...(result.publicBaseUrl
+              ? { publicBaseUrl: result.publicBaseUrl }
+              : {}),
+            ...(result.dockerContainerId
+              ? { dockerContainerId: result.dockerContainerId }
+              : {}),
+            ...(result.dockerContainerName
+              ? { dockerContainerName: result.dockerContainerName }
+              : {}),
+          },
+          "Workload provisioning completed",
+        ),
         status: "available",
         updatedAt: new Date(),
       })
@@ -521,13 +642,17 @@ export async function provisionWorkloadActivity(
         .where(eq(schema.projectWorkloads.id, input.workloadId))
         .limit(1)
     )[0];
-    const previous = existing?.observedState ?? {};
+    const previous = mergeObservedPayload(existing?.observedState);
+    const withFailureLog = appendActivityLog(
+      previous,
+      `Workload provisioning failed: ${errorMessage(error)}`,
+    );
 
     await db
       .update(schema.projectWorkloads)
       .set({
         observedState: {
-          ...previous,
+          ...withFailureLog,
           error: errorMessage(error),
         },
         status: "failed",

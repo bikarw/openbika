@@ -53,7 +53,17 @@ bun run db:generate
 bun run db:migrate
 ```
 
-4. Start the API and worker in separate terminals.
+4. Start the stack (API + dashboard + Temporal worker):
+
+```sh
+turbo run dev --filter=@openbika/api --filter=@openbika/worker --filter=dashboard
+```
+
+(or `turbo run dev` to include every package that defines `dev`)
+
+**URLs:** **`http://localhost:8787`** — control-plane API (+ Better Auth under `/api/auth/*`). **`http://localhost:3000`** — dashboard. Temporal UI defaults to **`http://localhost:8080`**. Logs may show **`0.0.0.0:8787`** (bind-all); browse **`localhost`**.
+
+Older split-terminal style:
 
 ```sh
 bun --filter @openbika/api dev
@@ -63,8 +73,16 @@ bun --filter @openbika/api dev
 bun --filter @openbika/worker dev
 ```
 
-The API listens on `http://localhost:8787`. Temporal UI is available at
-`http://localhost:8080`.
+**Free nip.io ingress on your laptop**: use `OPENBIKA_INGRESS_PUBLIC_IPV4=loopback`
+(or `127.0.0.1`) together with Docker Traefik and `nip.io`. If you leave `auto`,
+DNS points at your public WAN IP — traffic misses local Traefik, so workloads look “broken”.
+
+End-to-end check (signup → Node bundle function → nip URL):
+
+```sh
+chmod +x scripts/smoke-portal-function-nip.sh
+./scripts/smoke-portal-function-nip.sh
+```
 
 ## Local API Smoke Test
 

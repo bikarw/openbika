@@ -9,7 +9,7 @@ import {
 import { createApi } from "./app.js";
 
 const testEnv = {
-  API_HOST: "127.0.0.1",
+  API_HOST: "localhost",
   API_PORT: 8787,
   API_PUBLIC_URL: "http://localhost:8787",
   BETTER_AUTH_SECRET: "test-secret-at-least-thirty-two-characters",

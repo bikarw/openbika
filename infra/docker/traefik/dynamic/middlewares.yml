@@ -1,0 +1,7 @@
+# Referenced by workloads as `redirect-to-https@file`.
+http:
+  middlewares:
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true

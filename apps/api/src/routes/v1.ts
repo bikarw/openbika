@@ -8,16 +8,28 @@ import {
   createProjectRequestSchema,
   createRestoreRequestSchema,
   createWorkloadRequestSchema,
+  dedupeWorkloadIngressDomains,
   executeBranchQueryRequestSchema,
+  normalizeIngressFreeDnsZone,
+  parseIngressEmbeddedPublicIpv4,
+  patchWorkloadIngressDomainsRequestSchema,
+  patchWorkloadEnvRequestSchema,
+  pruneBlankWorkloadEnv,
+  readOmitPlatformHostname,
+  resolveWorkloadEffectiveListenPorts,
+  suggestWorkloadEdgeHostname,
+  suggestWorkloadEmbeddedIpIngressHostname,
   type BranchExpirationTtl,
   type BranchResponse,
   type BranchSchemaTableResponse,
   type DatabaseResponse,
+  type ProvisionWorkloadInput,
   type WorkloadResponse,
 } from "@openbika/contracts";
 import { createPool, schema } from "@openbika/db";
 import type { ControlPlaneDb } from "@openbika/db";
-import { createId } from "@openbika/domain";
+import { createId, generateULID } from "@openbika/domain";
+import { readDockerContainerLogs } from "@openbika/provisioning";
 import type { ApiEnv } from "@openbika/env";
 import { workflowNames } from "@openbika/queue";
 import { and, eq, inArray, lte } from "drizzle-orm";
@@ -89,6 +101,15 @@ interface SerializableBranch {
   status: (typeof schema.branches.$inferSelect)["status"];
 }
 
+type SerializableWorkload = typeof schema.projectWorkloads.$inferSelect;
+
+interface WorkloadProvisioningTarget {
+  id: string;
+  kind: SerializableWorkload["kind"];
+  observedState: unknown;
+  projectId: string;
+}
+
 function first<T>(rows: T[]): T | undefined {
   return rows[0];
 }
@@ -139,10 +160,7 @@ async function allocateProjectSlug({
     .from(schema.projects)
     .where(eq(schema.projects.organizationId, organizationId));
 
-  return pickUniqueSlug(
-    base,
-    new Set(projects.map((project) => project.slug)),
-  );
+  return pickUniqueSlug(base, new Set(projects.map((project) => project.slug)));
 }
 
 function isProjectSlugConflict(error: unknown): boolean {
@@ -887,6 +905,7 @@ async function serializeDatabase(
       : null,
     id: database.id,
     name: database.name,
+    observedState: database.observedState,
     postgresVersion: database.postgresVersion,
     projectId: database.projectId,
     status: database.status,
@@ -908,33 +927,96 @@ function serializeNullableDate(date: Date | null): string | null {
   return date ? date.toISOString() : null;
 }
 
+function readJsonRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
 type CreateWorkloadBody = z.infer<typeof createWorkloadRequestSchema>;
 
 function buildWorkloadDesiredState(
   input: CreateWorkloadBody,
 ): Record<string, unknown> {
   if (input.kind === "container") {
-    return {
+    const out: Record<string, unknown> = {
       build: input.build,
-      env: input.env,
       image: input.image,
       ports: input.ports,
     };
+    if (input.env !== undefined) {
+      const env = pruneBlankWorkloadEnv(input.env);
+      if (Object.keys(env).length > 0) {
+        out.env = env;
+      }
+    }
+    return out;
   }
 
-  return {
+  const out: Record<string, unknown> = {
     entrypoint: input.entrypoint,
     runtime: input.runtime,
     source: input.source,
   };
+  if (input.env !== undefined) {
+    const env = pruneBlankWorkloadEnv(input.env);
+    if (Object.keys(env).length > 0) {
+      out.env = env;
+    }
+  }
+  return out;
 }
 
 function serializeWorkload(
-  workload: typeof schema.projectWorkloads.$inferSelect,
+  workload: SerializableWorkload,
+  apiEnv: ApiEnv,
 ): WorkloadResponse {
+  type EdgeOut = NonNullable<WorkloadResponse["edge"]>;
+
+  const edgeDomainHint =
+    apiEnv.OPENBIKA_EDGE_PUBLIC_BASE_DOMAIN?.trim() ||
+    apiEnv.OPENBIKA_PUBLIC_BASE_DOMAIN?.trim();
+
+  const rawFreeZone = apiEnv.OPENBIKA_INGRESS_FREE_DNS_ZONE?.trim();
+  const freeDnsZone =
+    rawFreeZone !== undefined && rawFreeZone.length > 0
+      ? normalizeIngressFreeDnsZone(rawFreeZone)
+      : null;
+  const embeddedIp = parseIngressEmbeddedPublicIpv4(
+    apiEnv.OPENBIKA_INGRESS_PUBLIC_IPV4 ?? "",
+  );
+
+  let edge: EdgeOut | undefined;
+
+  const hasNipOrSslip = freeDnsZone !== null && embeddedIp !== null;
+  if (hasNipOrSslip) {
+    edge = {
+      embeddedPublicIpv4: embeddedIp,
+      freeDnsZone,
+      publicBaseDomain: freeDnsZone,
+      suggestedDefaultHostname: suggestWorkloadEmbeddedIpIngressHostname(
+        workload.id,
+        embeddedIp,
+        freeDnsZone,
+      ),
+    };
+  } else if (edgeDomainHint !== undefined && edgeDomainHint !== "") {
+    const publicBaseDomain = edgeDomainHint
+      .toLowerCase()
+      .replace(/^\.+|\.+$/g, "");
+    edge = {
+      publicBaseDomain,
+      suggestedDefaultHostname: suggestWorkloadEdgeHostname(
+        workload.id,
+        publicBaseDomain,
+      ),
+    };
+  }
+
   return {
     createdAt: workload.createdAt.toISOString(),
     desiredState: workload.desiredState,
+    ...(edge !== undefined ? { edge } : {}),
     id: workload.id,
     kind: workload.kind,
     name: workload.name,
@@ -943,6 +1025,60 @@ function serializeWorkload(
     status: workload.status,
     updatedAt: workload.updatedAt.toISOString(),
   };
+}
+
+async function startWorkloadProvisioning({
+  desiredState,
+  db,
+  env,
+  failureMessage,
+  workload,
+  workflowId,
+}: {
+  desiredState: Record<string, unknown>;
+  db: ControlPlaneDb;
+  env: ApiEnv;
+  failureMessage: string;
+  workload: WorkloadProvisioningTarget;
+  workflowId: string;
+}) {
+  const payload: ProvisionWorkloadInput = {
+    desiredState,
+    kind: workload.kind,
+    projectId: workload.projectId,
+    provider: "local",
+    workloadId: workload.id,
+  };
+
+  try {
+    await startControlPlaneWorkflow({
+      env,
+      name: workflowNames.provisionWorkload,
+      payload,
+      workflowId,
+    });
+  } catch (error) {
+    if (!(error instanceof WorkflowDispatchError)) {
+      throw error;
+    }
+
+    await db
+      .update(schema.projectWorkloads)
+      .set({
+        observedState: {
+          ...readJsonRecord(workload.observedState),
+          error: "Provisioning workflow could not start",
+        },
+        status: "failed",
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.projectWorkloads.id, workload.id))
+      .catch(() => undefined);
+
+    throw new HTTPException(503, {
+      message: failureMessage,
+    });
+  }
 }
 
 export function createV1Routes({ env }: CreateV1RoutesOptions) {
@@ -1343,7 +1479,7 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       .where(eq(schema.projectWorkloads.projectId, project.id));
 
     return c.json({
-      workloads: workloads.map(serializeWorkload),
+      workloads: workloads.map((w) => serializeWorkload(w, env)),
     });
   });
 
@@ -1378,39 +1514,15 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       });
     }
 
-    try {
-      await startControlPlaneWorkflow({
-        env,
-        name: workflowNames.provisionWorkload,
-        payload: {
-          desiredState: workload.desiredState,
-          kind: workload.kind,
-          projectId: workload.projectId,
-          provider: "local",
-          workloadId: workload.id,
-        },
-        workflowId: `provision-workload-${workload.id}`,
-      });
-    } catch (error) {
-      if (error instanceof WorkflowDispatchError) {
-        await db
-          .update(schema.projectWorkloads)
-          .set({
-            observedState: { error: "Provisioning workflow could not start" },
-            status: "failed",
-            updatedAt: new Date(),
-          })
-          .where(eq(schema.projectWorkloads.id, workload.id))
-          .catch(() => undefined);
-
-        throw new HTTPException(503, {
-          message:
-            "Workload was recorded, but the provisioning workflow could not be started",
-        });
-      }
-
-      throw error;
-    }
+    await startWorkloadProvisioning({
+      db,
+      desiredState: workload.desiredState,
+      env,
+      failureMessage:
+        "Workload was recorded, but the provisioning workflow could not be started",
+      workload: { ...workload, observedState: {} },
+      workflowId: `provision-workload-${workload.id}`,
+    });
 
     const created = first(
       await db
@@ -1428,7 +1540,7 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
 
     return c.json(
       {
-        workload: serializeWorkload(created),
+        workload: serializeWorkload(created, env),
       },
       201,
     );
@@ -1444,7 +1556,299 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
     });
 
     return c.json({
-      workload: serializeWorkload(workload),
+      workload: serializeWorkload(workload, env),
+    });
+  });
+
+  routes.get("/workloads/:workloadId/runtime-logs", async (c) => {
+    const user = requireUser(c);
+    const workload = await assertWorkloadAccess({
+      db: c.get("db"),
+      userId: user.id,
+      workloadId: c.req.param("workloadId"),
+    });
+
+    if (workload.kind !== "container" && workload.kind !== "function") {
+      throw new HTTPException(400, {
+        message: "Runtime logs apply only to container and function workloads.",
+      });
+    }
+
+    const tailRaw = c.req.query("tail");
+    const parsed = tailRaw !== undefined ? Number.parseInt(tailRaw, 10) : NaN;
+    const tail = Number.isFinite(parsed)
+      ? Math.min(10_000, Math.max(1, parsed))
+      : 500;
+
+    const observed =
+      typeof workload.observedState === "object" &&
+      workload.observedState !== null &&
+      !Array.isArray(workload.observedState)
+        ? (workload.observedState as Record<string, unknown>)
+        : {};
+
+    const containerRef =
+      typeof observed.dockerContainerId === "string" &&
+      observed.dockerContainerId.length > 0
+        ? observed.dockerContainerId
+        : typeof observed.dockerContainerName === "string" &&
+            observed.dockerContainerName.length > 0
+          ? observed.dockerContainerName
+          : null;
+
+    if (containerRef === null) {
+      throw new HTTPException(404, {
+        message:
+          "No Docker container is recorded yet. Re-run provisioning after the worker picks up changes.",
+      });
+    }
+
+    try {
+      const logs = await readDockerContainerLogs(containerRef, tail);
+      return c.json({ logs });
+    } catch (error) {
+      throw new HTTPException(503, {
+        message:
+          error instanceof Error
+            ? `Could not read Docker logs: ${error.message}`
+            : "Could not read Docker logs",
+      });
+    }
+  });
+
+  routes.patch("/workloads/:workloadId", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const workload = await assertWorkloadAccess({
+      db,
+      userId: user.id,
+      workloadId: c.req.param("workloadId"),
+    });
+
+    if (workload.kind !== "container" && workload.kind !== "function") {
+      throw new HTTPException(400, {
+        message:
+          "Environment variables are only supported for container and function workloads.",
+      });
+    }
+
+    const input = await parseJson(c, patchWorkloadEnvRequestSchema);
+
+    const mergedDesired: Record<string, unknown> = {
+      ...readJsonRecord(workload.desiredState),
+      env: pruneBlankWorkloadEnv(input.env),
+    };
+
+    await db
+      .update(schema.projectWorkloads)
+      .set({
+        desiredState: mergedDesired,
+        status: "provisioning",
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.projectWorkloads.id, workload.id));
+
+    await startWorkloadProvisioning({
+      db,
+      desiredState: mergedDesired,
+      env,
+      failureMessage:
+        "Workload was updated, but the provisioning workflow could not be started.",
+      workload,
+      workflowId: `provision-workload-${workload.id}-redeploy-${generateULID()}`,
+    });
+
+    const updatedRow = first(
+      await db
+        .select()
+        .from(schema.projectWorkloads)
+        .where(eq(schema.projectWorkloads.id, workload.id))
+        .limit(1),
+    );
+
+    if (!updatedRow) {
+      throw new HTTPException(500, {
+        message: "Workload metadata could not be loaded",
+      });
+    }
+
+    return c.json({
+      workload: serializeWorkload(updatedRow, env),
+    });
+  });
+
+  routes.patch("/workloads/:workloadId/domains", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const workload = await assertWorkloadAccess({
+      db,
+      userId: user.id,
+      workloadId: c.req.param("workloadId"),
+    });
+
+    if (workload.kind !== "container" && workload.kind !== "function") {
+      throw new HTTPException(400, {
+        message:
+          "Ingress domains apply only to container and function workloads.",
+      });
+    }
+
+    const body = await parseJson(c, patchWorkloadIngressDomainsRequestSchema);
+
+    let normalized;
+    try {
+      normalized = dedupeWorkloadIngressDomains(body.domains);
+    } catch (err) {
+      throw new HTTPException(400, {
+        message:
+          err instanceof Error
+            ? err.message
+            : "Invalid ingress domains payload",
+      });
+    }
+
+    const prevDesired = readJsonRecord(workload.desiredState);
+
+    const kindKey: "container" | "function" =
+      workload.kind === "function" ? "function" : "container";
+    const allowedPorts = resolveWorkloadEffectiveListenPorts(
+      prevDesired,
+      kindKey,
+    );
+    const allowedSet = new Set(allowedPorts);
+
+    if (normalized.length > 0) {
+      if (kindKey === "container" && allowedSet.size === 0) {
+        throw new HTTPException(400, {
+          message:
+            "This container workload has no declared publish ports yet. Set `ports` before attaching ingress domains.",
+        });
+      }
+      for (const d of normalized) {
+        if (!allowedSet.has(d.containerPort)) {
+          throw new HTTPException(400, {
+            message: `Container listen port ${String(d.containerPort)} is not declared on this workload. Declared ports: ${Array.from(allowedSet).join(", ") || "none"}.`,
+          });
+        }
+      }
+    }
+
+    const omitProvided = body.omitPlatformHostname;
+    const prevOmit = readOmitPlatformHostname(prevDesired);
+    const omitPlatformHostname =
+      omitProvided !== undefined ? omitProvided : prevOmit;
+
+    const mergedDesired: Record<string, unknown> = { ...prevDesired };
+    if (normalized.length === 0 && !omitPlatformHostname) {
+      delete mergedDesired.ingress;
+    } else {
+      const ingressPayload: Record<string, unknown> = {};
+      if (normalized.length > 0) {
+        ingressPayload.domains = normalized.map((row) => ({
+          containerPort: row.containerPort,
+          hostname: row.hostname,
+          https: row.https,
+          path: row.path,
+        }));
+      }
+      if (omitPlatformHostname) {
+        ingressPayload.omitPlatformHostname = true;
+      }
+      mergedDesired.ingress = ingressPayload;
+    }
+
+    await db
+      .update(schema.projectWorkloads)
+      .set({
+        desiredState: mergedDesired,
+        status: "provisioning",
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.projectWorkloads.id, workload.id));
+
+    await startWorkloadProvisioning({
+      db,
+      desiredState: mergedDesired,
+      env,
+      failureMessage:
+        "Domains were recorded, but the provisioning workflow could not be started.",
+      workload,
+      workflowId: `provision-workload-${workload.id}-domains-${generateULID()}`,
+    });
+
+    const updatedRow = first(
+      await db
+        .select()
+        .from(schema.projectWorkloads)
+        .where(eq(schema.projectWorkloads.id, workload.id))
+        .limit(1),
+    );
+
+    if (!updatedRow) {
+      throw new HTTPException(500, {
+        message: "Workload metadata could not be loaded",
+      });
+    }
+
+    return c.json({
+      workload: serializeWorkload(updatedRow, env),
+    });
+  });
+
+  routes.post("/workloads/:workloadId/rebuild", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const workload = await assertWorkloadAccess({
+      db,
+      userId: user.id,
+      workloadId: c.req.param("workloadId"),
+    });
+
+    if (workload.kind !== "container" && workload.kind !== "function") {
+      throw new HTTPException(400, {
+        message:
+          "Rebuild is only supported for container and function workloads.",
+      });
+    }
+
+    const desiredPayload: Record<string, unknown> = {
+      ...readJsonRecord(workload.desiredState),
+    };
+
+    await db
+      .update(schema.projectWorkloads)
+      .set({
+        status: "provisioning",
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.projectWorkloads.id, workload.id));
+
+    await startWorkloadProvisioning({
+      db,
+      desiredState: desiredPayload,
+      env,
+      failureMessage:
+        "Rebuild was requested, but the provisioning workflow could not be started.",
+      workload,
+      workflowId: `provision-workload-${workload.id}-rebuild-${generateULID()}`,
+    });
+
+    const updatedRow = first(
+      await db
+        .select()
+        .from(schema.projectWorkloads)
+        .where(eq(schema.projectWorkloads.id, workload.id))
+        .limit(1),
+    );
+
+    if (!updatedRow) {
+      throw new HTTPException(500, {
+        message: "Workload metadata could not be loaded",
+      });
+    }
+
+    return c.json({
+      workload: serializeWorkload(updatedRow, env),
     });
   });
 

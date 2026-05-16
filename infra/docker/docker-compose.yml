@@ -1,3 +1,7 @@
+networks:
+  openbika_edge:
+    name: openbika_edge
+
 services:
   postgres:
     image: postgres:18-alpine
@@ -28,6 +32,23 @@ services:
       POSTGRES_USER: openbika
     ports:
       - "7233:7233"
+
+  traefik:
+    image: traefik:v3.6.7
+    profiles: ["edge"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic:/etc/openbika/traefik/dynamic
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - openbika_edge
+    environment:
+      TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_EMAIL: ${OPENBIKA_TRAEFIK_ACME_EMAIL:-admin@example.com}
+    command:
+      - --configfile=/etc/traefik/traefik.yml
 
   temporal-ui:
     image: temporalio/ui:2.43.0

@@ -1,9 +1,10 @@
 import { NativeConnection, Worker } from "@temporalio/worker";
-import { parseEnv, workerEnvSchema } from "@openbika/env";
+import { bootstrapIngressIpv4Env, parseEnv, workerEnvSchema } from "@openbika/env";
 import { createLogger } from "@openbika/observability";
 
 import * as activities from "./activities.js";
 
+await bootstrapIngressIpv4Env();
 const env = parseEnv(workerEnvSchema);
 const logger = createLogger({
   level: env.LOG_LEVEL,

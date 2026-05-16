@@ -1,0 +1,32 @@
+# OpenBika edge — pin with compose image tag (Traefik v3.6.x line).
+global:
+  sendAnonymousUsage: false
+
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+    http:
+      tls:
+        certResolver: letsencrypt
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      # Email is injected by Docker Compose (`OPENBIKA_TRAEFIK_ACME_EMAIL` → Traefik ENV).
+      storage: /etc/openbika/traefik/dynamic/acme.json
+      httpChallenge:
+        entryPoint: web
+      # Uncomment for LE staging during development:
+      # caServer: "https://acme-staging-v02.api.letsencrypt.org/directory"
+
+providers:
+  docker:
+    endpoint: unix:///var/run/docker.sock
+    exposedByDefault: false
+    watch: true
+    network: openbika_edge
+  file:
+    directory: /etc/openbika/traefik/dynamic
+    watch: true

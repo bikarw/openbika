@@ -23,6 +23,8 @@ import {
   type OrganizationResponse,
   organizationResponseSchema,
   type ProjectResponse,
+  type PatchWorkloadEnvRequest,
+  type PatchWorkloadIngressDomainsRequest,
   projectResponseSchema,
   type ProjectSummaryResponse,
   projectSummaryResponseSchema,
@@ -30,6 +32,8 @@ import {
   restoreJobResponseSchema,
   type WorkloadResponse,
   workloadResponseSchema,
+  type WorkloadRuntimeLogsResponse,
+  workloadRuntimeLogsResponseSchema,
 } from "@openbika/contracts";
 
 export interface OpenbikaClientOptions {
@@ -85,7 +89,7 @@ export class OpenbikaApiError extends Error {
 
 interface RequestOptions<TResponse> {
   body?: unknown;
-  method?: "GET" | "POST";
+  method?: "GET" | "PATCH" | "POST";
   parse: (body: unknown) => TResponse;
   path: string;
 }
@@ -239,6 +243,57 @@ export class OpenbikaClient {
     });
   }
 
+  async getWorkloadRuntimeLogs(
+    workloadId: string,
+    input: { tail?: number } = {},
+  ): Promise<WorkloadRuntimeLogsResponse> {
+    const search = new URLSearchParams();
+    if (input.tail !== undefined) {
+      search.set("tail", String(input.tail));
+    }
+    const query = search.size > 0 ? `?${search.toString()}` : "";
+
+    return this.request({
+      parse: (body) => workloadRuntimeLogsResponseSchema.parse(body),
+      path: `/v1/workloads/${encodeURIComponent(workloadId)}/runtime-logs${query}`,
+    });
+  }
+
+  async patchWorkloadEnv(
+    workloadId: string,
+    input: PatchWorkloadEnvRequest,
+  ): Promise<WorkloadResponse> {
+    return this.request({
+      body: input,
+      method: "PATCH",
+      parse: (body) =>
+        workloadResponseSchema.parse(readProperty(body, "workload")),
+      path: `/v1/workloads/${encodeURIComponent(workloadId)}`,
+    });
+  }
+
+  async patchWorkloadDomains(
+    workloadId: string,
+    input: PatchWorkloadIngressDomainsRequest,
+  ): Promise<WorkloadResponse> {
+    return this.request({
+      body: input,
+      method: "PATCH",
+      parse: (body) =>
+        workloadResponseSchema.parse(readProperty(body, "workload")),
+      path: `/v1/workloads/${encodeURIComponent(workloadId)}/domains`,
+    });
+  }
+
+  async rebuildWorkload(workloadId: string): Promise<WorkloadResponse> {
+    return this.request({
+      method: "POST",
+      parse: (body) =>
+        workloadResponseSchema.parse(readProperty(body, "workload")),
+      path: `/v1/workloads/${encodeURIComponent(workloadId)}/rebuild`,
+    });
+  }
+
   async getDatabase(databaseId: string): Promise<DatabaseResponse> {
     return this.request({
       parse: (body) =>
@@ -342,7 +397,7 @@ export class OpenbikaClient {
     }
 
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, init);
-    const responseBody = await readJson(response);
+    const responseBody = await readApiJsonBody(response);
 
     if (!response.ok) {
       throw createApiError(response, responseBody);
@@ -352,14 +407,107 @@ export class OpenbikaClient {
   }
 }
 
-async function readJson(response: Response): Promise<unknown> {
+/**
+ * Parses a response body after trimming UTF-8 BOM and surrounding whitespace.
+ * Tolerates a leading `null` / garbage prefix concatenated before the payload
+ * (e.g. `null{"workloads":[]}`) by extracting the first top-level `{`/`[...]` value.
+ */
+function parseLenientApiJson(raw: string): unknown {
+  const withoutBom = raw.replace(/^\uFEFF/u, "");
+  const trimmed = withoutBom.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const slice = sliceFirstTopLevelJson(trimmed);
+    if (slice !== null) {
+      return JSON.parse(slice);
+    }
+    throw new SyntaxError("Body is not valid JSON");
+  }
+}
+
+function sliceFirstTopLevelJson(text: string): string | null {
+  const startObj = text.indexOf("{");
+  const startArr = text.indexOf("[");
+  const start =
+    startObj === -1
+      ? startArr
+      : startArr === -1
+        ? startObj
+        : Math.min(startObj, startArr);
+
+  if (start < 0) {
+    return null;
+  }
+
+  const s = text.slice(start);
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (c === "\\") {
+        escaped = true;
+      } else if (c === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (c === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (c === "{" || c === "[") {
+      stack.push(c === "{" ? "}" : "]");
+      continue;
+    }
+
+    if (c === "}" || c === "]") {
+      const expected = stack[stack.length - 1];
+      if (c !== expected) {
+        return null;
+      }
+      stack.pop();
+      if (stack.length === 0) {
+        return s.slice(0, i + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+function previewBody(text: string, max = 200): string {
+  const oneLine = text.replace(/\s+/gu, " ").trim();
+  return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max)}…`;
+}
+
+async function readApiJsonBody(response: Response): Promise<unknown> {
   const text = await response.text();
 
   if (!text) {
     return null;
   }
 
-  return JSON.parse(text) as unknown;
+  try {
+    return parseLenientApiJson(text);
+  } catch (cause) {
+    const contentType = response.headers.get("content-type") ?? "unknown";
+    const message = `Openbika API returned a non-JSON response (HTTP ${String(response.status)}, ${contentType}): ${previewBody(text)}`;
+    throw new SyntaxError(message, { cause });
+  }
 }
 
 function createApiError(response: Response, body: unknown): OpenbikaApiError {

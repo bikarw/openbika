@@ -19,6 +19,7 @@
     "@openbika/domain": "workspace:*",
     "@openbika/env": "workspace:*",
     "@openbika/observability": "workspace:*",
+    "@openbika/provisioning": "workspace:*",
     "@openbika/queue": "workspace:*",
     "@sindresorhus/slugify": "^3.0.0",
     "@temporalio/client": "^1.17.0",
