@@ -21,6 +21,7 @@ import {
   readStoredOrganizationId,
   writeStoredOrganizationId,
 } from "#/lib/selected-organization";
+import { Route as RootRoute } from "#/routes/__root";
 import {
   Card,
   CardContent,
@@ -64,6 +65,7 @@ function serverDomainStatusLabel(status: string): string {
 
 function OrganizationSettingsRoutePage() {
   const { organizationSlug } = Route.useParams();
+  const { auth } = RootRoute.useRouteContext();
   const router = useRouter();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -195,6 +197,7 @@ function OrganizationSettingsRoutePage() {
       headerStatus={healthStatus}
       onSignOut={handleSignOut}
       organizationSlug={organizationSlug}
+      user={auth.user}
       orgSwitcher={
         <OrgSwitcher
           disabled={pending && organizations.length === 0}

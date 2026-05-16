@@ -74,6 +74,8 @@ import {
 import * as React from "react";
 
 import { authClient } from "#/auth-client";
+import type { AuthUser } from "#/auth-session";
+import { HeaderUserMenu } from "#/components/header-user-menu";
 import {
   HeaderStatusBadgeSkeleton,
   ProjectMainViewSkeleton,
@@ -112,6 +114,7 @@ import {
   readStoredOrganizationId,
   writeStoredOrganizationId,
 } from "#/lib/selected-organization";
+import { Route as RootRoute } from "#/routes/__root";
 
 interface ProjectWorkspaceProps {
   children?: React.ReactNode;
@@ -281,6 +284,7 @@ export function ProjectWorkspace({
   const router = useRouter();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { auth } = RootRoute.useRouteContext();
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
@@ -629,6 +633,7 @@ export function ProjectWorkspace({
         projects={projects}
         projectSlug={projectSlug}
         selectedOrganizationId={selectedOrganizationId}
+        user={auth.user}
         view={view}
         workloadDetailHydrationError={workloadDetailHydrationError}
         workloadDetailHydrationPending={workloadDetailHydrationPending}
@@ -687,6 +692,7 @@ interface ProjectWorkspaceShellProps {
   projects: ProjectResponse[];
   projectSlug: string;
   selectedOrganizationId: string | null;
+  user: AuthUser | null;
   view: ProjectWorkspaceView;
   workloadDetailHydrationError: string | null;
   workloadDetailHydrationPending: boolean;
@@ -712,6 +718,7 @@ function ProjectWorkspaceShell({
   projects,
   projectSlug,
   selectedOrganizationId,
+  user,
   view,
   workloadDetailHydrationError,
   workloadDetailHydrationPending,
@@ -742,20 +749,23 @@ function ProjectWorkspaceShell({
           />
         </div>
 
-        <div className="hidden shrink-0 items-center justify-end gap-2 md:flex">
-          {healthStatus === "loading" ? <HeaderStatusBadgeSkeleton /> : null}
-          {healthStatus === "ok" ? (
-            <Badge className="gap-1.5" variant="outline">
-              <span className="size-1.5 rounded-full bg-primary" />
-              All OK
-            </Badge>
-          ) : null}
-          {healthStatus === "error" ? (
-            <Badge className="gap-1.5" variant="outline">
-              <span className="size-1.5 rounded-full bg-destructive" />
-              Can&apos;t reach service
-            </Badge>
-          ) : null}
+        <div className="flex shrink-0 items-center justify-end gap-2">
+          <div className="hidden items-center gap-2 md:flex">
+            {healthStatus === "loading" ? <HeaderStatusBadgeSkeleton /> : null}
+            {healthStatus === "ok" ? (
+              <Badge className="gap-1.5" variant="outline">
+                <span className="size-1.5 rounded-full bg-primary" />
+                All OK
+              </Badge>
+            ) : null}
+            {healthStatus === "error" ? (
+              <Badge className="gap-1.5" variant="outline">
+                <span className="size-1.5 rounded-full bg-destructive" />
+                Can&apos;t reach service
+              </Badge>
+            ) : null}
+          </div>
+          <HeaderUserMenu onSignOut={onSignOut} user={user} />
         </div>
       </header>
 

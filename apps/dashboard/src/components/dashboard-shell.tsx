@@ -5,6 +5,8 @@ import { Boxes, LogOut, Settings } from 'lucide-react'
 import { Badge } from '@openbika/ui/components/badge'
 import { Button } from '@openbika/ui/components/button'
 
+import type { AuthUser } from '#/auth-session'
+import { HeaderUserMenu } from '#/components/header-user-menu'
 import { HeaderStatusBadgeSkeleton } from '#/components/loading-placeholders'
 import {
   Sidebar,
@@ -24,6 +26,7 @@ export interface DashboardShellProps {
   onSignOut: () => void
   organizationSlug?: string
   orgSwitcher: React.ReactNode
+  user: AuthUser | null
 }
 
 export function DashboardShell({
@@ -33,6 +36,7 @@ export function DashboardShell({
   onSignOut,
   organizationSlug,
   orgSwitcher,
+  user,
 }: DashboardShellProps) {
   const navigate = useNavigate()
 
@@ -52,20 +56,23 @@ export function DashboardShell({
       <header className="flex h-16 min-w-0 items-center justify-between gap-4 border-border border-b px-3">
         <div className="flex min-w-0 items-center">{orgSwitcher}</div>
 
-        <div className="hidden shrink-0 items-center justify-end gap-2 md:flex">
-          {headerStatus === 'loading' ? <HeaderStatusBadgeSkeleton /> : null}
-          {headerStatus === 'ok' ? (
-            <Badge className="gap-1.5" variant="outline">
-              <span className="size-1.5 rounded-full bg-primary" />
-              All OK
-            </Badge>
-          ) : null}
-          {headerStatus === 'error' ? (
-            <Badge className="gap-1.5" variant="outline">
-              <span className="size-1.5 rounded-full bg-destructive" />
-              Can&apos;t reach service
-            </Badge>
-          ) : null}
+        <div className="flex shrink-0 items-center justify-end gap-2">
+          <div className="hidden items-center gap-2 md:flex">
+            {headerStatus === 'loading' ? <HeaderStatusBadgeSkeleton /> : null}
+            {headerStatus === 'ok' ? (
+              <Badge className="gap-1.5" variant="outline">
+                <span className="size-1.5 rounded-full bg-primary" />
+                All OK
+              </Badge>
+            ) : null}
+            {headerStatus === 'error' ? (
+              <Badge className="gap-1.5" variant="outline">
+                <span className="size-1.5 rounded-full bg-destructive" />
+                Can&apos;t reach service
+              </Badge>
+            ) : null}
+          </div>
+          <HeaderUserMenu onSignOut={onSignOut} user={user} />
         </div>
       </header>
 
