@@ -58,6 +58,10 @@ export const apiEnvSchema = baseEnvSchema.extend({
   OPENBIKA_TRAEFIK_MAIN_CONFIG: z.string().optional(),
   /** Docker Compose .env path; used as a fallback for OPENBIKA_TRAEFIK_ACME_EMAIL. */
   OPENBIKA_TRAEFIK_COMPOSE_ENV: z.string().optional(),
+  /** URL Traefik should use to reach the API from inside Docker. */
+  OPENBIKA_API_UPSTREAM: z.string().url().optional(),
+  /** URL Traefik should use to reach the dashboard from inside Docker. */
+  OPENBIKA_DASHBOARD_UPSTREAM: z.string().url().optional(),
 });
 
 export const workerEnvSchema = baseEnvSchema.extend({

@@ -47,6 +47,8 @@ services:
       - openbika_edge
     environment:
       TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_EMAIL: ${OPENBIKA_TRAEFIK_ACME_EMAIL:-admin@example.com}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command:
       - --configfile=/etc/traefik/traefik.yml
 

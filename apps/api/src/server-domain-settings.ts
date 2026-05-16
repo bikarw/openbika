@@ -21,13 +21,17 @@ interface ApplyServerDomainSettingsInput {
 }
 
 function apiUpstream(env: ApiEnv): string {
-  return process.env.OPENBIKA_API_UPSTREAM?.trim() || env.API_PUBLIC_URL;
+  return (
+    env.OPENBIKA_API_UPSTREAM?.trim() ||
+    process.env.OPENBIKA_API_UPSTREAM?.trim() ||
+    `http://host.docker.internal:${String(env.API_PORT)}`
+  );
 }
 
 function dashboardUpstream(env: ApiEnv): string {
   return (
+    env.OPENBIKA_DASHBOARD_UPSTREAM?.trim() ||
     process.env.OPENBIKA_DASHBOARD_UPSTREAM?.trim() ||
-    process.env.DASHBOARD_PUBLIC_URL?.trim() ||
     "http://host.docker.internal:3000"
   );
 }
