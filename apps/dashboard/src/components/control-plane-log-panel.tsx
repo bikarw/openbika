@@ -6,8 +6,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@openbika/ui/components/card";
-import { cn } from "@openbika/ui/lib/utils";
 import * as React from "react";
+
+import { LogPaneSkeletonLines } from "#/components/loading-placeholders";
 
 interface ControlPlaneLogPanelProps {
   description?: string;
@@ -39,17 +40,17 @@ export function ControlPlaneLogPanel({
       <CardContent>
         <div
           aria-live="polite"
-          className={cn(
-            "max-h-[min(32rem,60dvh)] space-y-1 overflow-y-auto rounded-md border border-border bg-muted/20 p-3",
-            pending && entries.length === 0 && "text-muted-foreground",
-          )}
+          className="max-h-[min(32rem,60dvh)] space-y-1 overflow-y-auto rounded-md border border-border bg-muted/20 p-3"
         >
           {entries.length === 0 ? (
-            <p className="text-muted-foreground text-sm">
-              {pending
-                ? "Waiting for control-plane activity…"
-                : "No log lines yet. Activity will appear here while this resource provisions or redeploys."}
-            </p>
+            pending ? (
+              <LogPaneSkeletonLines />
+            ) : (
+              <p className="text-muted-foreground text-sm">
+                No log lines yet. Activity will appear here while this resource
+                provisions or redeploys.
+              </p>
+            )
           ) : (
             entries.map((entry, index) => (
               <p key={`${entry.at}-${entry.message}-${String(index)}`} className="font-mono text-xs break-words whitespace-pre-wrap">

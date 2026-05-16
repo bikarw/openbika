@@ -69,6 +69,12 @@ import {
 import * as React from "react";
 
 import { authClient } from "#/auth-client";
+import {
+  HeaderStatusBadgeSkeleton,
+  ProjectMainViewSkeleton,
+  ProjectSwitcherLoadingLines,
+  ProjectWorkspaceRouteSkeleton,
+} from "#/components/loading-placeholders";
 import { OrgSwitcher } from "#/components/org-switcher";
 import { SqlEditor } from "#/components/sql-editor";
 import { TablesStudio } from "#/components/tables-studio";
@@ -593,49 +599,61 @@ export function ProjectWorkspace({
     await navigate({ to: "/login" });
   }
 
+  const workspaceOutletContext: ProjectWorkspaceOutletContext = {
+    branches,
+    databases,
+    onCreateBranch: handleCreateBranch,
+    organizationSlug,
+    projectSlug,
+    refreshWorkloads,
+    workloads,
+  };
+
   return (
-    <ProjectWorkspaceShell
-      branches={branches}
-      databaseDetailId={databaseDetailId}
-      databases={databases}
-      healthStatus={healthStatus}
-      onRefreshWorkloads={refreshWorkloads}
-      onCreateBranch={handleCreateBranch}
-      onSelectOrganization={handleSelectOrganization}
-      onSelectProject={handleSelectProject}
-      onSignOut={handleSignOut}
-      organizations={organizations}
-      organizationSlug={organizationSlug}
-      pending={pending}
-      project={project}
-      projects={projects}
-      projectSlug={projectSlug}
-      selectedOrganizationId={selectedOrganizationId}
-      view={view}
-      workloadDetailHydrationError={workloadDetailHydrationError}
-      workloadDetailHydrationPending={workloadDetailHydrationPending}
-      workloadDetailId={workloadDetailId}
-      workloads={workloads}
-    >
-      {children ?? (
-        <ProjectWorkspaceContent
-          branches={branches}
-          databases={databases}
-          errorMessage={loadError}
-          loading={pending}
-          onCreateBranch={handleCreateBranch}
-          onCreateDatabase={handleCreateDatabase}
-          onCreateWorkload={handleCreateWorkload}
-          organizationSlug={organizationSlug}
-          project={project}
-          projectSlug={projectSlug}
-          selectedBranch={selectedBranch}
-          view={view}
-          workloads={workloads}
-          focusedDatabaseId={focusedDatabaseId}
-        />
-      )}
-    </ProjectWorkspaceShell>
+    <ProjectOutletContext.Provider value={workspaceOutletContext}>
+      <ProjectWorkspaceShell
+        branches={branches}
+        databaseDetailId={databaseDetailId}
+        databases={databases}
+        healthStatus={healthStatus}
+        onRefreshWorkloads={refreshWorkloads}
+        onCreateBranch={handleCreateBranch}
+        onSelectOrganization={handleSelectOrganization}
+        onSelectProject={handleSelectProject}
+        onSignOut={handleSignOut}
+        organizations={organizations}
+        organizationSlug={organizationSlug}
+        pending={pending}
+        project={project}
+        projects={projects}
+        projectSlug={projectSlug}
+        selectedOrganizationId={selectedOrganizationId}
+        view={view}
+        workloadDetailHydrationError={workloadDetailHydrationError}
+        workloadDetailHydrationPending={workloadDetailHydrationPending}
+        workloadDetailId={workloadDetailId}
+        workloads={workloads}
+      >
+        {children ?? (
+          <ProjectWorkspaceContent
+            branches={branches}
+            databases={databases}
+            errorMessage={loadError}
+            loading={pending}
+            onCreateBranch={handleCreateBranch}
+            onCreateDatabase={handleCreateDatabase}
+            onCreateWorkload={handleCreateWorkload}
+            organizationSlug={organizationSlug}
+            project={project}
+            projectSlug={projectSlug}
+            selectedBranch={selectedBranch}
+            view={view}
+            workloads={workloads}
+            focusedDatabaseId={focusedDatabaseId}
+          />
+        )}
+      </ProjectWorkspaceShell>
+    </ProjectOutletContext.Provider>
   );
 }
 
@@ -694,14 +712,6 @@ function ProjectWorkspaceShell({
   workloadDetailId,
   workloads,
 }: ProjectWorkspaceShellProps) {
-  const pathname = useRouterState({
-    select: (s) => stripTrailingSlash(s.location.pathname),
-  });
-  const databasesBasePath = stripTrailingSlash(
-    `/${organizationSlug}/projects/${projectSlug}/databases`,
-  );
-  const hideProjectSidebar = pathname.startsWith(`${databasesBasePath}/`);
-
   const dedicatedResourceInset =
     view === "database-detail" || view === "workload-detail";
 
@@ -720,23 +730,14 @@ function ProjectWorkspaceShell({
           <ProjectSwitcher
             disabled={pending || projects.length === 0}
             onSelectProject={onSelectProject}
+            pending={pending}
             project={project}
             projects={projects}
           />
         </div>
 
-        <div
-          className={cn(
-            "shrink-0 items-center justify-end gap-2",
-            hideProjectSidebar ? "flex" : "hidden md:flex",
-          )}
-        >
-          {healthStatus === "loading" ? (
-            <Badge className="gap-1.5" variant="outline">
-              <span className="size-1.5 animate-pulse rounded-full bg-muted-foreground" />
-              Checking…
-            </Badge>
-          ) : null}
+        <div className="hidden shrink-0 items-center justify-end gap-2 md:flex">
+          {healthStatus === "loading" ? <HeaderStatusBadgeSkeleton /> : null}
           {healthStatus === "ok" ? (
             <Badge className="gap-1.5" variant="outline">
               <span className="size-1.5 rounded-full bg-primary" />
@@ -752,31 +753,22 @@ function ProjectWorkspaceShell({
         </div>
       </header>
 
-      <div
-        className={cn(
-          "grid min-h-[calc(100dvh-4rem)]",
-          hideProjectSidebar ? "grid-cols-1" : "md:grid-cols-[280px_1fr]",
-        )}
-      >
-        {hideProjectSidebar ? null : (
-          <ProjectSidebar
-            databases={databases}
-            onSignOut={onSignOut}
-            organizationSlug={organizationSlug}
-            project={project}
-            projectSlug={projectSlug}
-            view={view}
-            workloads={workloads}
-          />
-        )}
-        <SidebarInset>
+      <div className="grid h-[calc(100dvh-4rem)] min-h-0 md:grid-cols-[280px_1fr]">
+        <ProjectSidebar
+          databases={databases}
+          onSignOut={onSignOut}
+          organizationSlug={organizationSlug}
+          project={project}
+          projectSlug={projectSlug}
+          view={view}
+          workloads={workloads}
+        />
+        <SidebarInset className="flex min-h-0 flex-col">
           {dedicatedResourceInset ? (
             <WorkspaceDedicatedResourceInset
               branches={branches}
               databaseDetailId={databaseDetailId}
               databases={databases}
-              onCreateBranch={onCreateBranch}
-              onRefreshWorkloads={onRefreshWorkloads}
               organizationSlug={organizationSlug}
               pending={pending}
               project={project}
@@ -819,8 +811,6 @@ function WorkspaceDedicatedResourceInset({
   children,
   databases,
   databaseDetailId,
-  onCreateBranch,
-  onRefreshWorkloads,
   organizationSlug,
   pending,
   project,
@@ -835,8 +825,6 @@ function WorkspaceDedicatedResourceInset({
   children: React.ReactNode;
   databases: DatabaseResponse[];
   databaseDetailId?: string;
-  onCreateBranch: ProjectWorkspaceOutletContext["onCreateBranch"];
-  onRefreshWorkloads: ProjectWorkspaceOutletContext["refreshWorkloads"];
   organizationSlug: string;
   pending: boolean;
   project: ProjectResponse | null;
@@ -848,26 +836,8 @@ function WorkspaceDedicatedResourceInset({
   workloads: WorkloadResponse[];
 }) {
   if (!project || pending) {
-    return (
-      <div className="flex flex-col gap-3 p-4 lg:p-8">
-        <Card>
-          <CardContent className="text-muted-foreground py-6 text-sm">
-            Loading project…
-          </CardContent>
-        </Card>
-      </div>
-    );
+    return <ProjectWorkspaceRouteSkeleton />;
   }
-
-  const outletValue: ProjectWorkspaceOutletContext = {
-    branches,
-    databases,
-    onCreateBranch,
-    organizationSlug,
-    projectSlug,
-    refreshWorkloads: onRefreshWorkloads,
-    workloads,
-  };
 
   const detailDatabase =
     databaseDetailId !== undefined
@@ -884,29 +854,27 @@ function WorkspaceDedicatedResourceInset({
     detailDatabase === null
   ) {
     return (
-      <ProjectOutletContext.Provider value={outletValue}>
-        <div className="mx-auto w-full max-w-7xl p-4 lg:p-8">
-          <Card>
-            <CardHeader>
-              <CardTitle>Database not found</CardTitle>
-              <CardDescription>
-                This database is not part of this project (or may have been
-                removed).
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Link
-                className={cn(buttonVariants({ size: "sm" }), "gap-1.5")}
-                params={{ organizationSlug, projectSlug }}
-                search={{}}
-                to="/$organizationSlug/projects/$projectSlug/databases"
-              >
-                Back to databases
-              </Link>
-            </CardContent>
-          </Card>
-        </div>
-      </ProjectOutletContext.Provider>
+      <div className="w-full min-w-0 px-4 py-4 md:px-5 md:py-5">
+        <Card>
+          <CardHeader>
+            <CardTitle>Database not found</CardTitle>
+            <CardDescription>
+              This database is not part of this project (or may have been
+              removed).
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Link
+              className={cn(buttonVariants({ size: "sm" }), "gap-1.5")}
+              params={{ organizationSlug, projectSlug }}
+              search={{}}
+              to="/$organizationSlug/projects/$projectSlug/databases"
+            >
+              Back to databases
+            </Link>
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 
@@ -916,38 +884,36 @@ function WorkspaceDedicatedResourceInset({
     detailWorkload === null
   ) {
     return (
-      <ProjectOutletContext.Provider value={outletValue}>
-        <div className="mx-auto w-full max-w-7xl p-4 lg:p-8">
-          <Card>
-            <CardHeader>
-              <CardTitle>Workload not found</CardTitle>
-              {workloadDetailHydrationPending ? (
-                <CardDescription className="text-muted-foreground">
-                  Resolving workload from API…
-                </CardDescription>
-              ) : workloadDetailHydrationError ? (
-                <CardDescription className="text-destructive">
-                  {workloadDetailHydrationError}
-                </CardDescription>
-              ) : (
-                <CardDescription>
-                  This workload is not part of this project (or may have been
-                  removed).
-                </CardDescription>
-              )}
-            </CardHeader>
-            <CardContent>
-              <Link
-                className={cn(buttonVariants({ size: "sm" }), "gap-1.5")}
-                params={{ organizationSlug, projectSlug }}
-                to="/$organizationSlug/projects/$projectSlug/workloads"
-              >
-                Back to workloads
-              </Link>
-            </CardContent>
-          </Card>
-        </div>
-      </ProjectOutletContext.Provider>
+      <div className="w-full min-w-0 px-4 py-4 md:px-5 md:py-5">
+        <Card>
+          <CardHeader>
+            <CardTitle>Workload not found</CardTitle>
+            {workloadDetailHydrationPending ? (
+              <CardDescription className="text-muted-foreground">
+                Resolving workload from API…
+              </CardDescription>
+            ) : workloadDetailHydrationError ? (
+              <CardDescription className="text-destructive">
+                {workloadDetailHydrationError}
+              </CardDescription>
+            ) : (
+              <CardDescription>
+                This workload is not part of this project (or may have been
+                removed).
+              </CardDescription>
+            )}
+          </CardHeader>
+          <CardContent>
+            <Link
+              className={cn(buttonVariants({ size: "sm" }), "gap-1.5")}
+              params={{ organizationSlug, projectSlug }}
+              to="/$organizationSlug/projects/$projectSlug/workloads"
+            >
+              Back to workloads
+            </Link>
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 
@@ -1007,59 +973,62 @@ function WorkspaceDedicatedResourceInset({
     /\/branches\/[^/]+\/(?:sql|tables)(?:\/|$)/u.test(pathname);
 
   return (
-    <ProjectOutletContext.Provider value={outletValue}>
-      <div className="flex min-h-[calc(100dvh-4rem)] flex-col bg-background">
-        {tabBarParams ? (
-          <div className="border-border border-b px-4 pt-6 lg:px-8">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pb-3 text-muted-foreground text-sm">
-              {tabBarParams.kind === "database" ? (
-                <Link
-                  className="hover:text-foreground"
-                  params={{ organizationSlug, projectSlug }}
-                  search={{}}
-                  to="/$organizationSlug/projects/$projectSlug/databases"
-                >
-                  Databases
-                </Link>
-              ) : (
-                <Link
-                  className="hover:text-foreground"
-                  params={{ organizationSlug, projectSlug }}
-                  to="/$organizationSlug/projects/$projectSlug/workloads"
-                >
-                  Workloads
-                </Link>
-              )}
-              <span aria-hidden>/</span>
-              <span className="truncate font-medium text-foreground">
-                {tabBarParams.detailTitle}
-              </span>
-              {tabBarParams.kind === "database" &&
-              databaseDetailId !== undefined ? (
-                <WorkspaceDatabaseBreadcrumbBranchSwitch
-                  branches={branches}
-                  databaseId={databaseDetailId}
-                  organizationSlug={organizationSlug}
-                  projectSlug={projectSlug}
-                />
-              ) : null}
-            </div>
-            {tabBar}
+    <div className="flex h-full min-h-0 flex-1 flex-col bg-background">
+      {tabBarParams ? (
+        <div className="border-border border-b px-4 pt-4 md:px-5 md:pt-5">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pb-3 text-muted-foreground text-sm">
+            {tabBarParams.kind === "database" ? (
+              <Link
+                className="hover:text-foreground"
+                params={{ organizationSlug, projectSlug }}
+                search={{}}
+                to="/$organizationSlug/projects/$projectSlug/databases"
+              >
+                Databases
+              </Link>
+            ) : (
+              <Link
+                className="hover:text-foreground"
+                params={{ organizationSlug, projectSlug }}
+                to="/$organizationSlug/projects/$projectSlug/workloads"
+              >
+                Workloads
+              </Link>
+            )}
+            <span aria-hidden>/</span>
+            <span className="truncate font-medium text-foreground">
+              {tabBarParams.detailTitle}
+            </span>
+            {tabBarParams.kind === "database" &&
+            databaseDetailId !== undefined ? (
+              <WorkspaceDatabaseBreadcrumbBranchSwitch
+                branches={branches}
+                databaseId={databaseDetailId}
+                organizationSlug={organizationSlug}
+                projectSlug={projectSlug}
+              />
+            ) : null}
           </div>
-        ) : (
-          tabBar
-        )}
-        <div
-          className={cn(
-            "mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 lg:flex-1 lg:p-8",
-            studioFullBleed &&
-              "max-w-none min-h-0 flex-1 overflow-hidden lg:px-8 lg:pb-6 lg:pt-2",
-          )}
-        >
-          {children}
+          {tabBar}
         </div>
+      ) : (
+        tabBar
+      )}
+      <div
+        className={cn(
+          "flex w-full min-w-0 flex-col gap-6 px-4 py-4 md:px-5 md:py-5",
+          tabBarParams !== null && "min-h-0 flex-1",
+          studioFullBleed &&
+            "max-w-none overflow-hidden gap-2 px-2 pb-4 pt-2 md:px-3",
+        )}
+      >
+        {tabBarParams !== null ? (
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</div>
+        ) : (
+          children
+        )}
       </div>
-    </ProjectOutletContext.Provider>
+    </div>
   );
 }
 
@@ -1372,6 +1341,7 @@ function InsetTabMuted({ label }: { label: string }) {
 interface ProjectSwitcherProps {
   disabled: boolean;
   onSelectProject: (projectSlug: string) => void;
+  pending?: boolean;
   project: ProjectResponse | null;
   projects: ProjectResponse[];
 }
@@ -1379,9 +1349,12 @@ interface ProjectSwitcherProps {
 function ProjectSwitcher({
   disabled,
   onSelectProject,
+  pending = false,
   project,
   projects,
 }: ProjectSwitcherProps) {
+  const showProjectSkeleton = pending && projects.length === 0;
+
   return (
     <SidebarMenu className="inline-block max-w-xs min-w-0">
       <SidebarMenuItem>
@@ -1393,11 +1366,15 @@ function ProjectSwitcher({
               type="button"
             >
               <Boxes className="size-4 shrink-0" data-slot="project-icon" />
-              <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-medium">
-                  {project?.name ?? "Project"}
-                </span>
-              </div>
+              {showProjectSkeleton ? (
+                <ProjectSwitcherLoadingLines />
+              ) : (
+                <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
+                  <span className="truncate font-medium">
+                    {project?.name ?? "Project"}
+                  </span>
+                </div>
+              )}
               <ChevronsUpDown className="ml-auto size-4 shrink-0 opacity-60" />
             </SidebarMenuButton>
           </DropdownMenuTrigger>
@@ -1637,7 +1614,7 @@ function ProjectWorkspaceContent({
   workloads,
 }: ProjectWorkspaceContentProps) {
   return (
-    <div className="flex flex-col gap-6 p-4 lg:mx-auto lg:max-w-7xl lg:p-8">
+    <div className="flex min-w-0 flex-col gap-6 px-4 py-4 md:px-5 md:py-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h1 className="truncate text-2xl font-semibold tracking-tight">
@@ -1671,14 +1648,9 @@ function ProjectWorkspaceContent({
       ) : null}
 
       {loading ? (
-        <Card>
-          <CardContent className="text-muted-foreground py-6 text-sm">
-            Loading project…
-          </CardContent>
-        </Card>
+        <ProjectMainViewSkeleton />
       ) : project ? (
         <>
-          <ProvisioningStatusCard databases={databases} workloads={workloads} />
           {view === "dashboard" ? (
             <ProjectOverview
               databases={databases}
@@ -1756,121 +1728,6 @@ function ProjectWorkspaceContent({
         </>
       ) : null}
     </div>
-  );
-}
-
-function ProvisioningStatusCard({
-  databases,
-  workloads,
-}: {
-  databases: DatabaseResponse[];
-  workloads: WorkloadResponse[];
-}) {
-  const trackedDatabases = databases.filter(
-    (database) =>
-      database.status === "requested" ||
-      database.status === "provisioning" ||
-      database.status === "failed" ||
-      database.branches.some(
-        (branch) =>
-          branch.status === "requested" ||
-          branch.status === "creating" ||
-          branch.status === "failed",
-      ),
-  );
-
-  const trackedWorkloads = workloads.filter(
-    (workload) =>
-      workload.status === "requested" ||
-      workload.status === "provisioning" ||
-      workload.status === "failed",
-  );
-
-  if (trackedDatabases.length === 0 && trackedWorkloads.length === 0) {
-    return null;
-  }
-
-  const hasActiveWork = hasActiveProvisioning(databases, workloads);
-
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex min-w-0 items-start justify-between gap-3">
-          <div className="min-w-0">
-            <CardTitle className="truncate">
-              {hasActiveWork
-                ? "Provisioning in progress"
-                : "Provisioning status"}
-            </CardTitle>
-            <CardDescription>
-              {hasActiveWork
-                ? "Background workflow updates are refreshing automatically."
-                : "Review the latest workflow result before continuing."}
-            </CardDescription>
-          </div>
-          {hasActiveWork ? (
-            <Badge className="gap-1.5" variant="outline">
-              <span className="size-1.5 animate-pulse rounded-full bg-primary" />
-              Live
-            </Badge>
-          ) : null}
-        </div>
-      </CardHeader>
-      <CardContent className="grid gap-3">
-        {trackedDatabases.map((database) => (
-          <div
-            className="rounded-lg border border-border bg-muted/30 p-3"
-            key={database.id}
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="min-w-0">
-                <p className="truncate font-medium text-sm">{database.name}</p>
-                <p className="text-muted-foreground text-xs">
-                  Database workflow
-                </p>
-              </div>
-              <Badge variant="outline">{database.status}</Badge>
-            </div>
-            {database.branches.length > 0 ? (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {database.branches.map((branch) => (
-                  <Badge className="gap-1.5" key={branch.id} variant="outline">
-                    <GitBranch className="size-3" />
-                    {branch.name}: {branch.status}
-                  </Badge>
-                ))}
-              </div>
-            ) : null}
-            {database.endpoint ? (
-              <p className="text-muted-foreground mt-3 text-xs">
-                Endpoint ready at {database.endpoint.hostname}:
-                {database.endpoint.port}
-              </p>
-            ) : (
-              <p className="text-muted-foreground mt-3 text-xs">
-                Waiting for an endpoint from the data plane.
-              </p>
-            )}
-          </div>
-        ))}
-        {trackedWorkloads.map((workload) => (
-          <div
-            className="rounded-lg border border-border bg-muted/30 p-3"
-            key={workload.id}
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="min-w-0">
-                <p className="truncate font-medium text-sm">{workload.name}</p>
-                <p className="text-muted-foreground text-xs">
-                  {workloadKindLabel(workload.kind)}
-                </p>
-              </div>
-              <Badge variant="outline">{workload.status}</Badge>
-            </div>
-          </div>
-        ))}
-      </CardContent>
-    </Card>
   );
 }
 
@@ -3713,19 +3570,23 @@ export function BranchWorkspaceView({
       );
     case "sql":
       return (
-        <SqlEditor
-          branchId={selectedBranch.branch.id}
-          branchName={selectedBranch.branch.name}
-          databaseName={selectedBranch.database.name}
-        />
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <SqlEditor
+            branchId={selectedBranch.branch.id}
+            branchName={selectedBranch.branch.name}
+            databaseName={selectedBranch.database.name}
+          />
+        </div>
       );
     case "tables":
       return (
-        <TablesStudio
-          branchId={selectedBranch.branch.id}
-          branchName={selectedBranch.branch.name}
-          databaseName={selectedBranch.database.name}
-        />
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <TablesStudio
+            branchId={selectedBranch.branch.id}
+            branchName={selectedBranch.branch.name}
+            databaseName={selectedBranch.database.name}
+          />
+        </div>
       );
     default: {
       const exhaustive: never = view;

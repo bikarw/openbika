@@ -25,6 +25,8 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import { ProjectsPanelGridSkeleton } from "#/components/loading-placeholders";
+
 export interface ProjectsPanelProps {
   errorMessage: string | null;
   loading: boolean;
@@ -52,7 +54,7 @@ export function ProjectsPanel({
   const title = org ? `${org.name}'s projects` : "Your projects";
 
   return (
-    <div className="mx-auto flex max-w-7xl flex-col gap-6 p-4 lg:p-8">
+    <div className="flex w-full min-w-0 flex-col gap-6 px-4 py-4 md:px-5 md:py-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
@@ -74,11 +76,7 @@ export function ProjectsPanel({
 
       <div className="flex flex-col gap-4">
         {loading ? (
-          <Card>
-            <CardContent className="text-muted-foreground py-6 text-sm">
-              Loading projects…
-            </CardContent>
-          </Card>
+          <ProjectsPanelGridSkeleton />
         ) : rows.length === 0 ? (
           <Card>
             <CardContent className="flex flex-col items-center gap-3 py-10 text-center">

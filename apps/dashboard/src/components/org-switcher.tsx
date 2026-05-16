@@ -14,6 +14,8 @@ import {
 import { cn } from '@openbika/ui/lib/utils'
 import { Building2, ChevronsUpDown } from 'lucide-react'
 
+import { OrgSwitcherLoadingLines } from '#/components/loading-placeholders'
+
 export interface OrgSwitcherProps {
   disabled?: boolean
   onSelectOrganization: (organizationId: string) => void
@@ -48,11 +50,7 @@ export function OrgSwitcher({
               className="size-4 shrink-0"
               data-slot="org-icon"
             />
-            <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
-              <span className="truncate font-medium text-muted-foreground">
-                Loading organizations…
-              </span>
-            </div>
+            <OrgSwitcherLoadingLines />
           </SidebarMenuButton>
         </SidebarMenuItem>
       </SidebarMenu>

@@ -5,8 +5,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@openbika/ui/components/card";
-import { cn } from "@openbika/ui/lib/utils";
 import * as React from "react";
+
+import { LogPaneSkeletonLines } from "#/components/loading-placeholders";
 
 interface WorkloadRuntimeLogPanelProps {
   description?: string;
@@ -51,17 +52,16 @@ export function WorkloadRuntimeLogPanel({
         ) : null}
         <div
           aria-live="polite"
-          className={cn(
-            "max-h-[min(32rem,60dvh)] space-y-1 overflow-y-auto rounded-md border border-border bg-muted/20 p-3",
-            pending && text.length === 0 && "text-muted-foreground",
-          )}
+          className="max-h-[min(32rem,60dvh)] space-y-1 overflow-y-auto rounded-md border border-border bg-muted/20 p-3"
         >
           {text.length === 0 && !errorMessage ? (
-            <p className="text-muted-foreground text-sm">
-              {pending
-                ? "Loading container output…"
-                : "No container output captured yet."}
-            </p>
+            pending ? (
+              <LogPaneSkeletonLines />
+            ) : (
+              <p className="text-muted-foreground text-sm">
+                No container output captured yet.
+              </p>
+            )
           ) : (
             <pre className="m-0 break-words font-mono text-xs whitespace-pre-wrap">
               {text}

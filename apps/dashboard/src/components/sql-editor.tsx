@@ -21,6 +21,7 @@ import {
 import * as React from "react";
 import { basicSetup } from "codemirror";
 
+import { SchemaStatusSkeleton } from "#/components/loading-placeholders";
 import { QueryResultTable } from "#/components/query-result-table";
 import { getDashboardApiClient } from "#/lib/openbika-client";
 
@@ -62,12 +63,12 @@ function createEditorTheme() {
       backgroundColor: "var(--background)",
       color: "var(--foreground)",
       fontSize: "0.875rem",
-      minHeight: "24rem",
+      height: "100%",
     },
     ".cm-content": {
       fontFamily:
         'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-      minHeight: "24rem",
+      minHeight: "100%",
       padding: "1rem",
     },
     ".cm-gutters": {
@@ -224,8 +225,8 @@ export function SqlEditor({
   }
 
   return (
-    <div className="grid min-h-[calc(100dvh-14rem)] gap-3 xl:grid-rows-[minmax(28rem,1fr)_minmax(16rem,0.55fr)]">
-      <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-background">
         <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-border border-b px-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -270,9 +271,9 @@ export function SqlEditor({
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 space-y-3 p-3">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
           {!readOnly && !writeModeConfirmed ? (
-            <div className="flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex shrink-0 flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
               <div className="flex gap-2">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
                 <p>
@@ -290,9 +291,9 @@ export function SqlEditor({
             </div>
           ) : null}
 
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 text-xs">
             <div className="text-muted-foreground">
-              {schemaLoading ? "Loading schema for autocomplete..." : null}
+              {schemaLoading ? <SchemaStatusSkeleton /> : null}
               {schemaError ? (
                 <span className="text-destructive" role="alert">
                   {schemaError}
@@ -315,7 +316,7 @@ export function SqlEditor({
           </div>
 
           <div
-            className="min-h-[24rem] overflow-hidden rounded-lg border border-border"
+            className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border"
             ref={editorContainerRef}
           />
         </div>
@@ -323,14 +324,14 @@ export function SqlEditor({
 
       {queryError ? (
         <p
-          className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-destructive text-sm"
+          className="shrink-0 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-destructive text-sm"
           role="alert"
         >
           {queryError}
         </p>
       ) : null}
 
-      <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background">
+      <section className="flex max-h-[min(22rem,45dvh)] min-h-[11rem] flex-[0_1_38%] flex-col overflow-hidden rounded-xl border border-border bg-background">
         <div className="flex h-10 shrink-0 items-center justify-between border-border border-b px-4">
           <div className="font-medium text-sm">Results</div>
           {result ? (

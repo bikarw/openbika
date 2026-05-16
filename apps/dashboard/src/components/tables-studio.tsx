@@ -6,6 +6,7 @@ import type {
 import { Badge } from "@openbika/ui/components/badge";
 import { Button } from "@openbika/ui/components/button";
 import { Input } from "@openbika/ui/components/input";
+import { Skeleton } from "@openbika/ui/components/skeleton";
 import { cn } from "@openbika/ui/lib/utils";
 import {
   Check,
@@ -23,6 +24,10 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import {
+  TablePreviewSkeleton,
+  TablesSidebarSkeleton,
+} from "#/components/loading-placeholders";
 import { getDashboardApiClient } from "#/lib/openbika-client";
 
 interface TablesStudioProps {
@@ -535,7 +540,7 @@ export function TablesStudio({
   }
 
   return (
-    <div className="grid h-full min-h-0 overflow-hidden gap-1 md:grid-cols-[300px_minmax(0,1fr)]">
+    <div className="grid h-full min-h-0 flex-1 gap-1 overflow-hidden md:grid-cols-[300px_minmax(0,1fr)]">
       <aside className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background">
         <div className="shrink-0 space-y-3 border-border border-b p-4">
           <div className="flex items-center justify-between gap-2">
@@ -548,7 +553,11 @@ export function TablesStudio({
                 {branchName} · {databaseName}
               </p>
             </div>
-            <Badge variant="outline">{tables.length}</Badge>
+            {schemaLoading ? (
+              <Skeleton aria-hidden className="h-5 w-9 rounded-full" />
+            ) : (
+              <Badge variant="outline">{tables.length}</Badge>
+            )}
           </div>
           <div className="relative">
             <Search className="absolute top-1/2 left-2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -561,9 +570,7 @@ export function TablesStudio({
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-2">
-          {schemaLoading ? (
-            <p className="text-muted-foreground text-sm">Loading tables...</p>
-          ) : null}
+          {schemaLoading ? <TablesSidebarSkeleton /> : null}
           {schemaError ? (
             <p className="text-destructive text-sm" role="alert">
               {schemaError}
@@ -778,11 +785,7 @@ export function TablesStudio({
 
             <div className="relative min-h-0 flex-1 overflow-hidden">
               <div className="absolute inset-0 overflow-auto pb-16">
-                {previewLoading ? (
-                  <div className="flex h-full min-h-56 items-center justify-center text-muted-foreground text-sm">
-                    Loading preview...
-                  </div>
-                ) : null}
+                {previewLoading ? <TablePreviewSkeleton /> : null}
                 {previewError ? (
                   <p className="p-4 text-destructive text-sm" role="alert">
                     {previewError}

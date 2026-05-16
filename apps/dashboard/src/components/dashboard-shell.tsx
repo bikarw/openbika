@@ -3,6 +3,8 @@ import { Boxes, LogOut } from 'lucide-react'
 
 import { Badge } from '@openbika/ui/components/badge'
 import { Button } from '@openbika/ui/components/button'
+
+import { HeaderStatusBadgeSkeleton } from '#/components/loading-placeholders'
 import {
   Sidebar,
   SidebarContent,
@@ -33,12 +35,7 @@ export function DashboardShell({
         <div className="flex min-w-0 items-center">{orgSwitcher}</div>
 
         <div className="hidden shrink-0 items-center justify-end gap-2 md:flex">
-          {headerStatus === 'loading' ? (
-            <Badge className="gap-1.5" variant="outline">
-              <span className="size-1.5 animate-pulse rounded-full bg-muted-foreground" />
-              Checking…
-            </Badge>
-          ) : null}
+          {headerStatus === 'loading' ? <HeaderStatusBadgeSkeleton /> : null}
           {headerStatus === 'ok' ? (
             <Badge className="gap-1.5" variant="outline">
               <span className="size-1.5 rounded-full bg-primary" />

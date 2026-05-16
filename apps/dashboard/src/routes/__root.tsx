@@ -9,6 +9,8 @@ import { TanStackDevtools } from '@tanstack/react-devtools'
 import type { AuthSnapshot } from '#/auth-session'
 import { getAuthSessionFn } from '#/auth-session'
 
+import { SessionLoadingCenter } from '#/components/loading-placeholders'
+
 import '../styles.css'
 
 export interface RouterAuthContext {
@@ -39,11 +41,7 @@ export const Route = createRootRouteWithContext<RouterAuthContext>()({
 })
 
 function SessionPending() {
-  return (
-    <div className="text-muted-foreground flex min-h-dvh items-center justify-center p-6 text-sm">
-      Loading session…
-    </div>
-  )
+  return <SessionLoadingCenter />
 }
 
 function RootDocument({ children }: { children: React.ReactNode }) {
