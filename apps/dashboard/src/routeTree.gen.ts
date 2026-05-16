@@ -26,6 +26,7 @@ import { Route as ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadI
 import { Route as ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdIndexRouteImport } from './routes/_protected/$organizationSlug/projects/$projectSlug/databases/$databaseId/index'
 import { Route as ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdLogsRouteImport } from './routes/_protected/$organizationSlug/projects/$projectSlug/workloads/$workloadId/logs'
 import { Route as ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdEnvRouteImport } from './routes/_protected/$organizationSlug/projects/$projectSlug/workloads/$workloadId/env'
+import { Route as ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdDomainsRouteImport } from './routes/_protected/$organizationSlug/projects/$projectSlug/workloads/$workloadId/domains'
 import { Route as ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdLogsRouteImport } from './routes/_protected/$organizationSlug/projects/$projectSlug/databases/$databaseId/logs'
 import { Route as ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdEnvRouteImport } from './routes/_protected/$organizationSlug/projects/$projectSlug/databases/$databaseId/env'
 import { Route as ProtectedOrganizationSlugProjectsProjectSlugBranchesBranchIdViewRouteImport } from './routes/_protected/$organizationSlug/projects/$projectSlug/branches/$branchId/$view'
@@ -144,6 +145,15 @@ const ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdEnvRoute =
         ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdRouteRoute,
     } as any,
   )
+const ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdDomainsRoute =
+  ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdDomainsRouteImport.update(
+    {
+      id: '/domains',
+      path: '/domains',
+      getParentRoute: () =>
+        ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdRouteRoute,
+    } as any,
+  )
 const ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdLogsRoute =
   ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdLogsRouteImport.update(
     {
@@ -205,6 +215,7 @@ export interface FileRoutesByFullPath {
   '/$organizationSlug/projects/$projectSlug/branches/$branchId/$view': typeof ProtectedOrganizationSlugProjectsProjectSlugBranchesBranchIdViewRoute
   '/$organizationSlug/projects/$projectSlug/databases/$databaseId/env': typeof ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdEnvRoute
   '/$organizationSlug/projects/$projectSlug/databases/$databaseId/logs': typeof ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdLogsRoute
+  '/$organizationSlug/projects/$projectSlug/workloads/$workloadId/domains': typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdDomainsRoute
   '/$organizationSlug/projects/$projectSlug/workloads/$workloadId/env': typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdEnvRoute
   '/$organizationSlug/projects/$projectSlug/workloads/$workloadId/logs': typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdLogsRoute
   '/$organizationSlug/projects/$projectSlug/databases/$databaseId/': typeof ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdIndexRoute
@@ -226,6 +237,7 @@ export interface FileRoutesByTo {
   '/$organizationSlug/projects/$projectSlug/branches/$branchId/$view': typeof ProtectedOrganizationSlugProjectsProjectSlugBranchesBranchIdViewRoute
   '/$organizationSlug/projects/$projectSlug/databases/$databaseId/env': typeof ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdEnvRoute
   '/$organizationSlug/projects/$projectSlug/databases/$databaseId/logs': typeof ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdLogsRoute
+  '/$organizationSlug/projects/$projectSlug/workloads/$workloadId/domains': typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdDomainsRoute
   '/$organizationSlug/projects/$projectSlug/workloads/$workloadId/env': typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdEnvRoute
   '/$organizationSlug/projects/$projectSlug/workloads/$workloadId/logs': typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdLogsRoute
   '/$organizationSlug/projects/$projectSlug/databases/$databaseId': typeof ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdIndexRoute
@@ -251,6 +263,7 @@ export interface FileRoutesById {
   '/_protected/$organizationSlug/projects/$projectSlug/branches/$branchId/$view': typeof ProtectedOrganizationSlugProjectsProjectSlugBranchesBranchIdViewRoute
   '/_protected/$organizationSlug/projects/$projectSlug/databases/$databaseId/env': typeof ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdEnvRoute
   '/_protected/$organizationSlug/projects/$projectSlug/databases/$databaseId/logs': typeof ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdLogsRoute
+  '/_protected/$organizationSlug/projects/$projectSlug/workloads/$workloadId/domains': typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdDomainsRoute
   '/_protected/$organizationSlug/projects/$projectSlug/workloads/$workloadId/env': typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdEnvRoute
   '/_protected/$organizationSlug/projects/$projectSlug/workloads/$workloadId/logs': typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdLogsRoute
   '/_protected/$organizationSlug/projects/$projectSlug/databases/$databaseId/': typeof ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdIndexRoute
@@ -276,6 +289,7 @@ export interface FileRouteTypes {
     | '/$organizationSlug/projects/$projectSlug/branches/$branchId/$view'
     | '/$organizationSlug/projects/$projectSlug/databases/$databaseId/env'
     | '/$organizationSlug/projects/$projectSlug/databases/$databaseId/logs'
+    | '/$organizationSlug/projects/$projectSlug/workloads/$workloadId/domains'
     | '/$organizationSlug/projects/$projectSlug/workloads/$workloadId/env'
     | '/$organizationSlug/projects/$projectSlug/workloads/$workloadId/logs'
     | '/$organizationSlug/projects/$projectSlug/databases/$databaseId/'
@@ -297,6 +311,7 @@ export interface FileRouteTypes {
     | '/$organizationSlug/projects/$projectSlug/branches/$branchId/$view'
     | '/$organizationSlug/projects/$projectSlug/databases/$databaseId/env'
     | '/$organizationSlug/projects/$projectSlug/databases/$databaseId/logs'
+    | '/$organizationSlug/projects/$projectSlug/workloads/$workloadId/domains'
     | '/$organizationSlug/projects/$projectSlug/workloads/$workloadId/env'
     | '/$organizationSlug/projects/$projectSlug/workloads/$workloadId/logs'
     | '/$organizationSlug/projects/$projectSlug/databases/$databaseId'
@@ -321,6 +336,7 @@ export interface FileRouteTypes {
     | '/_protected/$organizationSlug/projects/$projectSlug/branches/$branchId/$view'
     | '/_protected/$organizationSlug/projects/$projectSlug/databases/$databaseId/env'
     | '/_protected/$organizationSlug/projects/$projectSlug/databases/$databaseId/logs'
+    | '/_protected/$organizationSlug/projects/$projectSlug/workloads/$workloadId/domains'
     | '/_protected/$organizationSlug/projects/$projectSlug/workloads/$workloadId/env'
     | '/_protected/$organizationSlug/projects/$projectSlug/workloads/$workloadId/logs'
     | '/_protected/$organizationSlug/projects/$projectSlug/databases/$databaseId/'
@@ -457,6 +473,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdEnvRouteImport
       parentRoute: typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdRouteRoute
     }
+    '/_protected/$organizationSlug/projects/$projectSlug/workloads/$workloadId/domains': {
+      id: '/_protected/$organizationSlug/projects/$projectSlug/workloads/$workloadId/domains'
+      path: '/domains'
+      fullPath: '/$organizationSlug/projects/$projectSlug/workloads/$workloadId/domains'
+      preLoaderRoute: typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdDomainsRouteImport
+      parentRoute: typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdRouteRoute
+    }
     '/_protected/$organizationSlug/projects/$projectSlug/databases/$databaseId/logs': {
       id: '/_protected/$organizationSlug/projects/$projectSlug/databases/$databaseId/logs'
       path: '/logs'
@@ -523,6 +546,7 @@ const ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdRouteRouteW
   )
 
 interface ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdRouteRouteChildren {
+  ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdDomainsRoute: typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdDomainsRoute
   ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdEnvRoute: typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdEnvRoute
   ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdLogsRoute: typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdLogsRoute
   ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdIndexRoute: typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdIndexRoute
@@ -530,6 +554,8 @@ interface ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdRouteRo
 
 const ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdRouteRouteChildren: ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdRouteRouteChildren =
   {
+    ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdDomainsRoute:
+      ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdDomainsRoute,
     ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdEnvRoute:
       ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdEnvRoute,
     ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdLogsRoute:

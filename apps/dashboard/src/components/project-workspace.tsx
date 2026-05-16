@@ -52,7 +52,6 @@ import {
   Code2,
   Copy,
   Database,
-  ExternalLink,
   Eye,
   EyeOff,
   GitBranch,
@@ -60,6 +59,7 @@ import {
   LayoutDashboard,
   LogOut,
   Plus,
+  RotateCcw,
   Table2,
   Workflow,
   X,
@@ -76,7 +76,6 @@ import {
   workloadKindIcon,
   workloadKindLabel,
   workloadObservedError,
-  workloadPublicBaseUrl,
 } from "#/components/workloads-panel";
 import { getDashboardApiClient } from "#/lib/openbika-client";
 import {
@@ -120,6 +119,7 @@ export interface ProjectWorkspaceOutletContext {
   }) => Promise<void>;
   organizationSlug: string;
   projectSlug: string;
+  refreshWorkloads: () => Promise<void>;
   workloads: WorkloadResponse[];
 }
 
@@ -449,6 +449,95 @@ export function ProjectWorkspace({
     setWorkloads((current) => [...current, workload]);
   }
 
+  const refreshWorkloads = React.useCallback(async (): Promise<void> => {
+    if (!project) {
+      return;
+    }
+
+    const client = getDashboardApiClient();
+    try {
+      const list = await client.listWorkloads(project.id);
+      setWorkloads(list);
+      setHealthStatus("ok");
+    } catch {
+      setHealthStatus("error");
+    }
+  }, [project]);
+
+  const workloadHydrationAttemptRef = React.useRef<string | null>(null);
+  const [workloadDetailHydrationPending, setWorkloadDetailHydrationPending] =
+    React.useState(false);
+  const [workloadDetailHydrationError, setWorkloadDetailHydrationError] =
+    React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (
+      view !== "workload-detail" ||
+      workloadDetailId === undefined ||
+      !project
+    ) {
+      workloadHydrationAttemptRef.current = null;
+      setWorkloadDetailHydrationPending(false);
+      setWorkloadDetailHydrationError(null);
+      return;
+    }
+
+    if (pending) {
+      return;
+    }
+
+    const listed = workloads.some((w) => w.id === workloadDetailId);
+    if (listed) {
+      workloadHydrationAttemptRef.current = null;
+      setWorkloadDetailHydrationPending(false);
+      setWorkloadDetailHydrationError(null);
+      return;
+    }
+
+    const attemptKey = `${project.id}:${workloadDetailId}`;
+    if (workloadHydrationAttemptRef.current === attemptKey) {
+      return;
+    }
+
+    workloadHydrationAttemptRef.current = attemptKey;
+    setWorkloadDetailHydrationPending(true);
+    setWorkloadDetailHydrationError(null);
+
+    let cancelled = false;
+    const client = getDashboardApiClient();
+
+    void (async () => {
+      try {
+        const fetched = await client.getWorkload(workloadDetailId);
+        if (cancelled) return;
+
+        if (fetched.projectId !== project.id) {
+          setWorkloadDetailHydrationError(
+            "This workload belongs to another project. Open it from that project's workloads list.",
+          );
+          setWorkloadDetailHydrationPending(false);
+          return;
+        }
+
+        setWorkloads((curr) =>
+          curr.some((w) => w.id === fetched.id) ? curr : [...curr, fetched],
+        );
+        setWorkloadDetailHydrationPending(false);
+        workloadHydrationAttemptRef.current = null;
+      } catch (err) {
+        if (cancelled) return;
+        setWorkloadDetailHydrationPending(false);
+        setWorkloadDetailHydrationError(
+          err instanceof Error ? err.message : "Unable to load this workload.",
+        );
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [view, workloadDetailId, project, pending, workloads]);
+
   async function handleCreateBranch(input: {
     copyMode: BranchCopyMode;
     databaseId: string;
@@ -497,6 +586,7 @@ export function ProjectWorkspace({
       databaseDetailId={databaseDetailId}
       databases={databases}
       healthStatus={healthStatus}
+      onRefreshWorkloads={refreshWorkloads}
       onCreateBranch={handleCreateBranch}
       onSelectOrganization={handleSelectOrganization}
       onSelectProject={handleSelectProject}
@@ -509,6 +599,8 @@ export function ProjectWorkspace({
       projectSlug={projectSlug}
       selectedOrganizationId={selectedOrganizationId}
       view={view}
+      workloadDetailHydrationError={workloadDetailHydrationError}
+      workloadDetailHydrationPending={workloadDetailHydrationPending}
       workloadDetailId={workloadDetailId}
       workloads={workloads}
     >
@@ -539,6 +631,7 @@ interface ProjectWorkspaceShellProps {
   databaseDetailId?: string;
   databases: DatabaseResponse[];
   healthStatus: "error" | "loading" | "ok" | null;
+  onRefreshWorkloads: () => Promise<void>;
   onCreateBranch: (input: {
     copyMode: BranchCopyMode;
     databaseId: string;
@@ -557,6 +650,8 @@ interface ProjectWorkspaceShellProps {
   projectSlug: string;
   selectedOrganizationId: string | null;
   view: ProjectWorkspaceView;
+  workloadDetailHydrationError: string | null;
+  workloadDetailHydrationPending: boolean;
   workloadDetailId?: string;
   workloads: WorkloadResponse[];
 }
@@ -567,6 +662,7 @@ function ProjectWorkspaceShell({
   databaseDetailId,
   databases,
   healthStatus,
+  onRefreshWorkloads,
   onCreateBranch,
   onSelectOrganization,
   onSelectProject,
@@ -579,6 +675,8 @@ function ProjectWorkspaceShell({
   projectSlug,
   selectedOrganizationId,
   view,
+  workloadDetailHydrationError,
+  workloadDetailHydrationPending,
   workloadDetailId,
   workloads,
 }: ProjectWorkspaceShellProps) {
@@ -674,11 +772,14 @@ function ProjectWorkspaceShell({
               databaseDetailId={databaseDetailId}
               databases={databases}
               onCreateBranch={onCreateBranch}
+              onRefreshWorkloads={onRefreshWorkloads}
               organizationSlug={organizationSlug}
               pending={pending}
               project={project}
               projectSlug={projectSlug}
               view={view}
+              workloadDetailHydrationError={workloadDetailHydrationError}
+              workloadDetailHydrationPending={workloadDetailHydrationPending}
               workloadDetailId={workloadDetailId}
               workloads={workloads}
             >
@@ -715,11 +816,14 @@ function WorkspaceDedicatedResourceInset({
   databases,
   databaseDetailId,
   onCreateBranch,
+  onRefreshWorkloads,
   organizationSlug,
   pending,
   project,
   projectSlug,
   view,
+  workloadDetailHydrationError,
+  workloadDetailHydrationPending,
   workloadDetailId,
   workloads,
 }: {
@@ -728,11 +832,14 @@ function WorkspaceDedicatedResourceInset({
   databases: DatabaseResponse[];
   databaseDetailId?: string;
   onCreateBranch: ProjectWorkspaceOutletContext["onCreateBranch"];
+  onRefreshWorkloads: ProjectWorkspaceOutletContext["refreshWorkloads"];
   organizationSlug: string;
   pending: boolean;
   project: ProjectResponse | null;
   projectSlug: string;
   view: ProjectWorkspaceView;
+  workloadDetailHydrationError: string | null;
+  workloadDetailHydrationPending: boolean;
   workloadDetailId?: string;
   workloads: WorkloadResponse[];
 }) {
@@ -754,6 +861,7 @@ function WorkspaceDedicatedResourceInset({
     onCreateBranch,
     organizationSlug,
     projectSlug,
+    refreshWorkloads: onRefreshWorkloads,
     workloads,
   };
 
@@ -809,10 +917,20 @@ function WorkspaceDedicatedResourceInset({
           <Card>
             <CardHeader>
               <CardTitle>Workload not found</CardTitle>
-              <CardDescription>
-                This workload is not part of this project (or may have been
-                removed).
-              </CardDescription>
+              {workloadDetailHydrationPending ? (
+                <CardDescription className="text-muted-foreground">
+                  Resolving workload from API…
+                </CardDescription>
+              ) : workloadDetailHydrationError ? (
+                <CardDescription className="text-destructive">
+                  {workloadDetailHydrationError}
+                </CardDescription>
+              ) : (
+                <CardDescription>
+                  This workload is not part of this project (or may have been
+                  removed).
+                </CardDescription>
+              )}
             </CardHeader>
             <CardContent>
               <Link
@@ -979,7 +1097,6 @@ function WorkspaceDatabaseTabs({
   const effectiveBranchId =
     studioBranchId ?? dbBranches[0]?.branch.id ?? null;
 
-  const isEnv = pathname === `${base}/env`;
   const isLogs = pathname === `${base}/logs`;
 
   const linkBase = {
@@ -1032,12 +1149,6 @@ function WorkspaceDatabaseTabs({
       ) : (
         <InsetTabMuted label="Tables" />
       )}
-      <InsetTabLink
-        active={isEnv}
-        label="Environment"
-        params={linkBase}
-        to="/$organizationSlug/projects/$projectSlug/databases/$databaseId/env"
-      />
       <InsetTabLink
         active={isLogs}
         label="Logs"
@@ -1171,6 +1282,7 @@ function WorkspaceWorkloadTabs({
     `/${organizationSlug}/projects/${projectSlug}/workloads/${workloadId}`,
   );
   const isOverview = pathname === base || pathname === `${base}/`;
+  const isDomains = pathname === `${base}/domains`;
   const isEnv = pathname === `${base}/env`;
   const isLogs = pathname === `${base}/logs`;
 
@@ -1191,6 +1303,12 @@ function WorkspaceWorkloadTabs({
         label="Overview"
         params={linkBase}
         to="/$organizationSlug/projects/$projectSlug/workloads/$workloadId/"
+      />
+      <InsetTabLink
+        active={isDomains}
+        label="Domains"
+        params={linkBase}
+        to="/$organizationSlug/projects/$projectSlug/workloads/$workloadId/domains"
       />
       <InsetTabLink
         active={isEnv}
@@ -1734,15 +1852,6 @@ function ProvisioningStatusCard({
               </div>
               <Badge variant="outline">{workload.status}</Badge>
             </div>
-            {workloadPublicBaseUrl(workload) ? (
-              <p className="text-muted-foreground mt-3 text-xs">
-                Route placeholder: {workloadPublicBaseUrl(workload)}
-              </p>
-            ) : (
-              <p className="text-muted-foreground mt-3 text-xs">
-                Waiting for workload endpoint from the data plane.
-              </p>
-            )}
           </div>
         ))}
       </CardContent>
@@ -2079,7 +2188,6 @@ function WorkloadServiceCard({
   workload: WorkloadResponse;
 }) {
   const Icon = workloadKindIcon(workload.kind);
-  const publicUrl = workloadPublicBaseUrl(workload);
   const error = workloadObservedError(workload);
 
   return (
@@ -2126,7 +2234,6 @@ function WorkloadServiceCard({
                   : "—"
             }
           />
-          <ResourceCardKeyRow label="Public URL" value={publicUrl ?? "—"} />
           {error ? (
             <p className="text-destructive flex items-start gap-1.5 text-xs leading-snug">
               <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
@@ -3079,9 +3186,32 @@ export function WorkloadResourceOverviewOutlet({
 }: {
   workloadId: string;
 }) {
-  const { workloads } = useProjectWorkspaceOutlet();
+  const { workloads, refreshWorkloads } = useProjectWorkspaceOutlet();
 
   const workload = workloads.find((item) => item.id === workloadId) ?? null;
+
+  const [rebuildPending, setRebuildPending] = React.useState(false);
+  const [rebuildError, setRebuildError] = React.useState<string | null>(null);
+
+  const busyProvisioning =
+    workload?.status === "provisioning" || workload?.status === "requested";
+
+  async function rebuild() {
+    if (workload === null) return;
+    setRebuildPending(true);
+    setRebuildError(null);
+    try {
+      const client = getDashboardApiClient();
+      await client.rebuildWorkload(workloadId);
+      await refreshWorkloads();
+    } catch (err) {
+      setRebuildError(
+        err instanceof Error ? err.message : "Rebuild could not be started",
+      );
+    } finally {
+      setRebuildPending(false);
+    }
+  }
 
   if (!workload) {
     return (
@@ -3094,7 +3224,6 @@ export function WorkloadResourceOverviewOutlet({
   }
 
   const Icon = workloadKindIcon(workload.kind);
-  const publicUrl = workloadPublicBaseUrl(workload);
   const error = workloadObservedError(workload);
 
   return (
@@ -3115,7 +3244,34 @@ export function WorkloadResourceOverviewOutlet({
                 </CardDescription>
               </div>
             </div>
-            <StatusDot status={workload.status} />
+            <div className="flex max-w-full min-w-0 flex-col items-end gap-2">
+              <div className="flex flex-wrap items-center justify-end gap-3">
+                <Button
+                  aria-busy={rebuildPending}
+                  className="gap-1.5"
+                  disabled={rebuildPending || busyProvisioning}
+                  onClick={() => void rebuild()}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  <RotateCcw
+                    className={cn("size-4", rebuildPending && "animate-spin")}
+                    aria-hidden
+                  />
+                  Rebuild
+                </Button>
+                <StatusDot status={workload.status} />
+              </div>
+              {rebuildError !== null ? (
+                <p
+                  className="max-w-[min(100%,21rem)] break-words text-right text-destructive text-xs leading-snug"
+                  role="alert"
+                >
+                  {rebuildError}
+                </p>
+              ) : null}
+            </div>
           </div>
         </CardHeader>
         <CardContent className="grid gap-3">
@@ -3141,19 +3297,6 @@ export function WorkloadResourceOverviewOutlet({
                   : "—"}
               </span>
             </div>
-          )}
-          {publicUrl ? (
-            <a
-              className="text-primary inline-flex items-center gap-1.5 truncate text-sm hover:underline"
-              href={publicUrl}
-              rel="noreferrer"
-              target="_blank"
-            >
-              <ExternalLink className="size-4" />
-              <span className="truncate">{publicUrl}</span>
-            </a>
-          ) : (
-            <p className="text-muted-foreground text-sm">No public URL yet</p>
           )}
           {error ? (
             <p className="text-destructive flex items-start gap-1.5 text-sm">

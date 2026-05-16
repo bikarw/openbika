@@ -1,18 +1,19 @@
-import { createFileRoute } from "@tanstack/react-router";
-
-import { DatabaseResourcePlaceholderOutlet } from "#/components/project-workspace";
+import { Navigate, createFileRoute } from "@tanstack/react-router";
 
 export const Route = createFileRoute(
   "/_protected/$organizationSlug/projects/$projectSlug/databases/$databaseId/env",
 )({
-  component: DatabaseEnvTabRoute,
+  component: DatabaseEnvRedirectRoute,
 });
 
-function DatabaseEnvTabRoute() {
+function DatabaseEnvRedirectRoute() {
+  const { databaseId, organizationSlug, projectSlug } = Route.useParams();
+
   return (
-    <DatabaseResourcePlaceholderOutlet
-      description="Per-database environment configuration and injected secrets will show here once wired to provisioning."
-      title="Environment"
+    <Navigate
+      params={{ databaseId, organizationSlug, projectSlug }}
+      replace
+      to="/$organizationSlug/projects/$projectSlug/databases/$databaseId/"
     />
   );
 }

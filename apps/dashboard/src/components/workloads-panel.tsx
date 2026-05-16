@@ -1,8 +1,9 @@
 import { Link } from "@tanstack/react-router";
-import type {
-  CreateWorkloadRequest,
-  FunctionRuntime,
-  WorkloadResponse,
+import {
+  type CreateWorkloadRequest,
+  type FunctionRuntime,
+  readObservedWorkloadIngressRoutes,
+  type WorkloadResponse,
 } from "@openbika/contracts";
 import { Badge } from "@openbika/ui/components/badge";
 import { Button, buttonVariants } from "@openbika/ui/components/button";
@@ -28,11 +29,16 @@ import {
   ChevronsUpDown,
   Code2,
   Container,
+  FolderArchive,
   Plus,
   Workflow,
   X,
 } from "lucide-react";
 import * as React from "react";
+
+import { parseEnvText } from "#/lib/env-text";
+
+const MAX_BUNDLE_FILE_BYTES = 4 * 1024 * 1024;
 
 type WorkloadStatusTone = "neutral" | "ok" | "warn" | "fail";
 type WorkloadKind = WorkloadResponse["kind"];
@@ -88,18 +94,34 @@ export function workloadStatusTone(
   }
 }
 
-export function workloadPublicBaseUrl(
-  workload: WorkloadResponse,
-): string | null {
-  const raw = workload.observedState.publicBaseUrl;
-  return typeof raw === "string" ? raw : null;
-}
-
 export function workloadObservedError(
   workload: WorkloadResponse,
 ): string | null {
   const raw = workload.observedState.error;
   return typeof raw === "string" ? raw : null;
+}
+
+/** Public ingress URL persisted by the provisioner (`observedState.ingressRoutes` or legacy `publicBaseUrl`). */
+export function workloadObservedPublicBaseUrl(
+  workload: WorkloadResponse,
+): string | null {
+  const observed =
+    workload.observedState !== null &&
+    typeof workload.observedState === "object" &&
+    !Array.isArray(workload.observedState)
+      ? (workload.observedState as Record<string, unknown>)
+      : {};
+
+  const routes = readObservedWorkloadIngressRoutes(observed);
+  const primary = routes[0]?.url?.trim();
+  if (primary) {
+    return primary;
+  }
+
+  const raw = observed.publicBaseUrl;
+  return typeof raw === "string" && raw.trim().length > 0
+    ? raw.trim()
+    : null;
 }
 
 export function WorkloadsPanel({
@@ -175,7 +197,6 @@ function WorkloadCard({
   workload: WorkloadResponse;
 }) {
   const Icon = workloadKindIcon(workload.kind);
-  const publicUrl = workloadPublicBaseUrl(workload);
   const error = workloadObservedError(workload);
 
   const card = (
@@ -218,7 +239,6 @@ function WorkloadCard({
             }
           />
         )}
-        <KeyValueRow label="Public URL" value={publicUrl ?? "—"} />
         {error ? (
           <p className="text-destructive flex items-start gap-1.5 text-xs leading-snug">
             <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
@@ -318,7 +338,12 @@ function CreateWorkloadModal({
   const [gitRef, setGitRef] = React.useState("");
   const [gitPath, setGitPath] = React.useState("");
   const [imageRef, setImageRef] = React.useState("");
-  const [artifactUri, setArtifactUri] = React.useState("");
+  const [artifactUriText, setArtifactUriText] = React.useState("");
+  const [bundleFromDevice, setBundleFromDevice] = React.useState<{
+    dataUrl: string;
+    filename: string;
+  } | null>(null);
+  const bundleFileInputRef = React.useRef<HTMLInputElement>(null);
   const [submitting, setSubmitting] = React.useState(false);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
 
@@ -335,7 +360,11 @@ function CreateWorkloadModal({
     setGitRef("");
     setGitPath("");
     setImageRef("");
-    setArtifactUri("");
+    setArtifactUriText("");
+    setBundleFromDevice(null);
+    if (bundleFileInputRef.current) {
+      bundleFileInputRef.current.value = "";
+    }
     setErrorMessage(null);
   }
 
@@ -363,33 +392,6 @@ function CreateWorkloadModal({
     return numbers.length > 0 ? numbers : undefined;
   }
 
-  function parseEnv(): Record<string, string> | undefined {
-    const trimmed = envText.trim();
-    if (!trimmed) return undefined;
-
-    const result: Record<string, string> = {};
-    const lines = trimmed.split(/\r?\n/u);
-
-    for (const line of lines) {
-      const stripped = line.trim();
-      if (!stripped) continue;
-
-      const equalsIndex = stripped.indexOf("=");
-      if (equalsIndex < 1) {
-        throw new Error(`Invalid env line: ${stripped}`);
-      }
-
-      const key = stripped.slice(0, equalsIndex).trim();
-      const value = stripped.slice(equalsIndex + 1).trim();
-      if (!key) {
-        throw new Error(`Invalid env key in: ${stripped}`);
-      }
-      result[key] = value;
-    }
-
-    return Object.keys(result).length > 0 ? result : undefined;
-  }
-
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmedName = name.trim();
@@ -409,7 +411,14 @@ function CreateWorkloadModal({
 
     try {
       const ports = parsePorts();
-      const env = parseEnv();
+      let env: Record<string, string> | undefined;
+      const envTrimmed = envText.trim();
+      if (envTrimmed) {
+        env = parseEnvText(envText);
+        if (Object.keys(env).length === 0) {
+          env = undefined;
+        }
+      }
       let payload: CreateWorkloadRequest;
 
       if (kind === "container") {
@@ -450,15 +459,24 @@ function CreateWorkloadModal({
             return { image: trimmed, type: "image" as const };
           }
 
-          const trimmed = artifactUri.trim();
+          if (bundleFromDevice?.dataUrl) {
+            return {
+              artifactUri: bundleFromDevice.dataUrl,
+              type: "bundle" as const,
+            };
+          }
+          const trimmed = artifactUriText.trim();
           if (!trimmed) {
-            throw new Error("Bundle source requires an artifact URI.");
+            throw new Error(
+              "Bundle source requires an artifact URI or a zip/tar file from this device.",
+            );
           }
           return { artifactUri: trimmed, type: "bundle" as const };
         })();
 
         payload = {
           entrypoint: entrypoint.trim() || "index.ts",
+          env,
           kind: "function",
           name: trimmedName,
           runtime,
@@ -631,13 +649,109 @@ function CreateWorkloadModal({
                         value={imageRef}
                       />
                     ) : (
-                      <Input
-                        onChange={(event) =>
-                          setArtifactUri(event.target.value)
-                        }
-                        placeholder="s3://bucket/bundle.zip"
-                        value={artifactUri}
-                      />
+                      <div className="space-y-2">
+                        <input
+                          accept=".zip,.tar,.tgz,.gz,application/x-tar,application/gzip,application/zip"
+                          aria-label="Choose bundle zip or tar file"
+                          className="sr-only size-0 overflow-hidden border-0 p-0"
+                          onChange={(event) => {
+                            const input = event.currentTarget;
+                            const file = input.files?.[0];
+                            if (!file) {
+                              return;
+                            }
+                            input.value = "";
+                            if (file.size > MAX_BUNDLE_FILE_BYTES) {
+                              const mb = MAX_BUNDLE_FILE_BYTES / (1024 * 1024);
+                              setErrorMessage(
+                                `Choose a bundle of ${mb} MB or smaller, or paste an artifact URI instead.`,
+                              );
+                              return;
+                            }
+                            const reader = new FileReader();
+                            reader.onload = () => {
+                              const data = reader.result;
+                              if (typeof data !== "string") {
+                                setErrorMessage(
+                                  "Could not read the selected file.",
+                                );
+                                return;
+                              }
+                              setErrorMessage(null);
+                              setArtifactUriText("");
+                              setBundleFromDevice({
+                                dataUrl: data,
+                                filename: file.name,
+                              });
+                            };
+                            reader.onerror = () => {
+                              setErrorMessage(
+                                "Could not read the selected file.",
+                              );
+                            };
+                            reader.readAsDataURL(file);
+                          }}
+                          ref={bundleFileInputRef}
+                          tabIndex={-1}
+                          type="file"
+                        />
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+                          <Input
+                            className="min-w-0 flex-1"
+                            disabled={bundleFromDevice !== null}
+                            id="artifact-uri"
+                            onChange={(event) => {
+                              setArtifactUriText(event.target.value);
+                              setBundleFromDevice(null);
+                            }}
+                            placeholder="s3://bucket/bundle.zip"
+                            value={artifactUriText}
+                          />
+                          <div className="flex shrink-0 gap-2">
+                            {bundleFromDevice ? (
+                              <Button
+                                className="shrink-0"
+                                disabled={submitting}
+                                onClick={() => {
+                                  setBundleFromDevice(null);
+                                  if (bundleFileInputRef.current) {
+                                    bundleFileInputRef.current.value = "";
+                                  }
+                                }}
+                                type="button"
+                                variant="outline"
+                              >
+                                Clear file
+                              </Button>
+                            ) : null}
+                            <Button
+                              className="inline-flex shrink-0 items-center gap-2"
+                              disabled={submitting}
+                              onClick={() =>
+                                bundleFileInputRef.current?.click()
+                              }
+                              type="button"
+                              variant="outline"
+                            >
+                              <FolderArchive className="size-4 shrink-0" />
+                              Choose file…
+                            </Button>
+                          </div>
+                        </div>
+                        <p className="text-muted-foreground text-xs">
+                          Paste an artifact URI, or attach a zip/tar from this
+                          device (up to {MAX_BUNDLE_FILE_BYTES / (1024 * 1024)}{" "}
+                          MB).
+                        </p>
+                        {bundleFromDevice ? (
+                          <p className="text-muted-foreground text-xs">
+                            Using local file:{" "}
+                            <span className="break-all font-mono text-foreground">
+                              {bundleFromDevice.filename}
+                            </span>
+                          </p>
+                        ) : null}
+                      </div>
                     )}
                   </div>
                 </>

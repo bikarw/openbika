@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { WorkloadResourcePlaceholderOutlet } from "#/components/project-workspace";
+import { WorkloadEnvironmentPanel } from "#/components/workload-env-panel";
 
 export const Route = createFileRoute(
   "/_protected/$organizationSlug/projects/$projectSlug/workloads/$workloadId/env",
@@ -9,10 +9,7 @@ export const Route = createFileRoute(
 });
 
 function WorkloadEnvTabRoute() {
-  return (
-    <WorkloadResourcePlaceholderOutlet
-      description="Declared environment variables vs what the workload currently observes will compare here."
-      title="Environment"
-    />
-  );
+  const { workloadId } = Route.useParams();
+
+  return <WorkloadEnvironmentPanel workloadId={workloadId} />;
 }
