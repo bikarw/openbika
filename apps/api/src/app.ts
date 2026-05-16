@@ -13,14 +13,65 @@ export interface CreateApiOptions {
   env: ApiEnv;
 }
 
-export function createApi({ env }: CreateApiOptions) {
-  const db = createDb(env.DATABASE_URL);
-  const auth = createAuth({
+function normalizedOrigin(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return null;
+  }
+}
+
+function requestHost(headers: Headers): string | null {
+  return headers.get("x-forwarded-host") ?? headers.get("host");
+}
+
+function requestOrigin(headers: Headers): string | null {
+  const origin = normalizedOrigin(headers.get("origin"));
+  if (!origin) return null;
+
+  const host = requestHost(headers);
+  if (!host) return null;
+
+  try {
+    return new URL(origin).host === host ? origin : null;
+  } catch {
+    return null;
+  }
+}
+
+function authForRequest({
+  db,
+  env,
+  headers,
+}: {
+  db: ReturnType<typeof createDb>;
+  env: ApiEnv;
+  headers: Headers;
+}) {
+  const trustedOrigins = new Set<string>();
+  for (const origin of [
+    normalizedOrigin(env.WEB_ORIGIN),
+    normalizedOrigin(env.API_PUBLIC_URL),
+    normalizedOrigin(env.BETTER_AUTH_URL),
+    requestOrigin(headers),
+  ]) {
+    if (origin) {
+      trustedOrigins.add(origin);
+    }
+  }
+
+  return createAuth({
     baseUrl: env.BETTER_AUTH_URL,
     db,
     secret: env.BETTER_AUTH_SECRET,
-    trustedOrigin: env.WEB_ORIGIN,
+    trustedOrigins: [...trustedOrigins],
   });
+}
+
+export function createApi({ env }: CreateApiOptions) {
+  const db = createDb(env.DATABASE_URL);
   const logger = createLogger({
     level: env.LOG_LEVEL,
     name: "openbika-api",
@@ -40,6 +91,12 @@ export function createApi({ env }: CreateApiOptions) {
   );
 
   app.use("*", async (c, next) => {
+    const auth = authForRequest({
+      db,
+      env,
+      headers: c.req.raw.headers,
+    });
+
     c.set("auth", auth);
     c.set("db", db);
     c.set("logger", logger);
@@ -55,7 +112,14 @@ export function createApi({ env }: CreateApiOptions) {
     await next();
   });
 
-  app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
+  app.on(["GET", "POST"], "/api/auth/*", (c) => {
+    const auth = authForRequest({
+      db,
+      env,
+      headers: c.req.raw.headers,
+    });
+    return auth.handler(c.req.raw);
+  });
   app.route("/v1", createV1Routes({ env }));
 
   app.get("/health", (c) =>

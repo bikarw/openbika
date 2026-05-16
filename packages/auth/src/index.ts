@@ -8,7 +8,7 @@ import { createId, generateULID } from "@openbika/domain";
 export type PortalRole = "owner" | "admin" | "member" | "viewer";
 
 export interface CreateAuthOptions {
-  trustedOrigin: string;
+  trustedOrigins: string[];
   db: ControlPlaneDb;
   secret: string;
   baseUrl: string;
@@ -18,12 +18,12 @@ export function createAuth({
   db,
   secret,
   baseUrl,
-  trustedOrigin,
+  trustedOrigins,
 }: CreateAuthOptions) {
   return betterAuth({
     baseURL: baseUrl,
     secret,
-    trustedOrigins: [trustedOrigin],
+    trustedOrigins,
     database: drizzleAdapter(db, {
       provider: "pg",
       schema: {
