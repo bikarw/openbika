@@ -9,6 +9,7 @@ import type {
   BranchConnectionResponse,
   BranchExpirationTtl,
   BranchResponse,
+  CreateDatabaseRequest,
   CreateWorkloadRequest,
   DatabaseResponse,
   OrganizationResponse,
@@ -40,6 +41,7 @@ import {
   SidebarGroup,
   SidebarInset,
   SidebarMenu,
+  SidebarMenuButton,
   SidebarMenuItem,
 } from "@openbika/ui/components/sidebar";
 import { cn } from "@openbika/ui/lib/utils";
@@ -449,6 +451,17 @@ export function ProjectWorkspace({
     setWorkloads((current) => [...current, workload]);
   }
 
+  async function handleCreateDatabase(input: CreateDatabaseRequest) {
+    if (!project) {
+      throw new Error("Project is not loaded yet.");
+    }
+
+    const client = getDashboardApiClient();
+    const database = await client.createDatabase(project.id, input);
+
+    setDatabases((current) => [...current, database]);
+  }
+
   const refreshWorkloads = React.useCallback(async (): Promise<void> => {
     if (!project) {
       return;
@@ -611,6 +624,7 @@ export function ProjectWorkspace({
           errorMessage={loadError}
           loading={pending}
           onCreateBranch={handleCreateBranch}
+          onCreateDatabase={handleCreateDatabase}
           onCreateWorkload={handleCreateWorkload}
           organizationSlug={organizationSlug}
           project={project}
@@ -693,18 +707,8 @@ function ProjectWorkspaceShell({
 
   return (
     <div className="min-h-dvh bg-background text-foreground">
-      <header
-        className={cn(
-          "grid h-16 border-border border-b",
-          hideProjectSidebar ? "grid-cols-1" : "md:grid-cols-[280px_1fr]",
-        )}
-      >
-        <div
-          className={cn(
-            "flex min-w-0 items-center gap-2 p-3",
-            !hideProjectSidebar && "border-border md:border-r",
-          )}
-        >
+      <header className="flex h-16 min-w-0 items-center justify-between gap-4 border-border border-b px-3">
+        <div className="flex min-w-0 items-center gap-2">
           <OrgSwitcher
             disabled={pending && organizations.length === 0}
             onSelectOrganization={onSelectOrganization}
@@ -712,7 +716,7 @@ function ProjectWorkspaceShell({
             pending={pending}
             selectedOrganizationId={selectedOrganizationId}
           />
-          <span className="text-muted-foreground text-sm">/</span>
+          <span className="shrink-0 text-muted-foreground text-sm">/</span>
           <ProjectSwitcher
             disabled={pending || projects.length === 0}
             onSelectProject={onSelectProject}
@@ -723,8 +727,8 @@ function ProjectWorkspaceShell({
 
         <div
           className={cn(
-            !hideProjectSidebar && "hidden md:flex",
-            "flex items-center justify-end gap-2 px-4 lg:px-8",
+            "shrink-0 items-center justify-end gap-2",
+            hideProjectSidebar ? "flex" : "hidden md:flex",
           )}
         >
           {healthStatus === "loading" ? (
@@ -1379,38 +1383,47 @@ function ProjectSwitcher({
   projects,
 }: ProjectSwitcherProps) {
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        className={cn(
-          buttonVariants({ variant: "ghost", size: "sm" }),
-          "min-w-0 justify-start",
-        )}
-        disabled={disabled}
-      >
-        <span className="truncate">{project?.name ?? "Project"}</span>
-        <ChevronsUpDown className="size-4 shrink-0 opacity-60" />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-56">
-        <DropdownMenuLabel className="text-muted-foreground text-xs">
-          Projects
-        </DropdownMenuLabel>
-        {projects.map((item) => (
-          <DropdownMenuItem
-            className="gap-2 p-2"
-            key={item.id}
-            onClick={() => onSelectProject(item.slug)}
-          >
-            <Boxes className="size-4 opacity-70" />
-            <div className="flex min-w-0 flex-col">
-              <span className="truncate font-medium">{item.name}</span>
-              <span className="truncate text-muted-foreground text-xs">
-                {item.slug}
-              </span>
-            </div>
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <SidebarMenu className="inline-block max-w-xs min-w-0">
+      <SidebarMenuItem>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild disabled={disabled}>
+            <SidebarMenuButton
+              className="w-full min-w-0"
+              size="lg"
+              type="button"
+            >
+              <Boxes className="size-4 shrink-0" data-slot="project-icon" />
+              <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
+                <span className="truncate font-medium">
+                  {project?.name ?? "Project"}
+                </span>
+              </div>
+              <ChevronsUpDown className="ml-auto size-4 shrink-0 opacity-60" />
+            </SidebarMenuButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-56">
+            <DropdownMenuLabel className="text-muted-foreground text-xs">
+              Projects
+            </DropdownMenuLabel>
+            {projects.map((item) => (
+              <DropdownMenuItem
+                className="gap-2 p-2"
+                key={item.id}
+                onClick={() => onSelectProject(item.slug)}
+              >
+                <Boxes className="size-4 opacity-70" />
+                <div className="flex min-w-0 flex-col">
+                  <span className="truncate font-medium">{item.name}</span>
+                  <span className="truncate text-muted-foreground text-xs">
+                    {item.slug}
+                  </span>
+                </div>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </SidebarMenuItem>
+    </SidebarMenu>
   );
 }
 
@@ -1565,6 +1578,7 @@ interface ProjectWorkspaceContentProps {
     name: string;
     parentBranchId?: string;
   }) => Promise<void>;
+  onCreateDatabase: (input: CreateDatabaseRequest) => Promise<void>;
   onCreateWorkload: (input: CreateWorkloadRequest) => Promise<void>;
   organizationSlug: string;
   project: ProjectResponse | null;
@@ -1588,9 +1602,9 @@ function viewDescription(
     case "databases":
       return focusedDatabaseId
         ? "Open any database tile to inspect branches and use the studio from the tabs along the top."
-        : "Postgres clusters for this project. Pick a database to manage branches.";
+        : "Every cluster is Postgres with branching environments. Open one to connect, browse tables, or run SQL.";
     case "workloads":
-      return "Container services and functions.";
+      return "Containers and functions in this project—they run beside your Postgres and use the same network context.";
     case "branches":
       return focusedDatabaseId
         ? "Branches for the highlighted database cluster on the databases page."
@@ -1613,6 +1627,7 @@ function ProjectWorkspaceContent({
   focusedDatabaseId,
   loading,
   onCreateBranch,
+  onCreateDatabase,
   onCreateWorkload,
   organizationSlug,
   project,
@@ -1667,14 +1682,15 @@ function ProjectWorkspaceContent({
           {view === "dashboard" ? (
             <ProjectOverview
               databases={databases}
+              onCreateDatabase={onCreateDatabase}
               organizationSlug={organizationSlug}
-              project={project}
               projectSlug={projectSlug}
               workloads={workloads}
             />
           ) : view === "services" ? (
             <ServicesPanel
               databases={databases}
+              onCreateDatabase={onCreateDatabase}
               organizationSlug={organizationSlug}
               projectSlug={projectSlug}
               workloads={workloads}
@@ -1683,6 +1699,7 @@ function ProjectWorkspaceContent({
             <DatabasesPanel
               databases={databases}
               focusedDatabaseId={focusedDatabaseId}
+              onCreateDatabase={onCreateDatabase}
               organizationSlug={organizationSlug}
               projectSlug={projectSlug}
             />
@@ -1857,18 +1874,110 @@ function ProvisioningStatusCard({
   );
 }
 
+function ServicesEmptyState({
+  databases,
+  onCreateDatabase,
+  organizationSlug,
+  projectSlug,
+}: {
+  databases: DatabaseResponse[];
+  onCreateDatabase: (input: CreateDatabaseRequest) => Promise<void>;
+  organizationSlug: string;
+  projectSlug: string;
+}) {
+  return (
+    <Card className="border-dashed bg-muted/15">
+      <CardContent className="flex flex-col items-center gap-8 px-4 py-12 text-center sm:px-8 sm:py-14">
+        <div className="flex flex-col items-center gap-4">
+          <div className="flex size-14 items-center justify-center rounded-full border border-dashed border-border bg-background">
+            <Boxes className="text-muted-foreground size-7" />
+          </div>
+          <div className="max-w-md">
+            <h3 className="font-semibold text-xl tracking-tight">
+              No services yet
+            </h3>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:justify-center">
+          <CreateDatabaseModal
+            existingNames={databases.map((d) => d.name)}
+            onCreateDatabase={onCreateDatabase}
+            triggerLabel="Create database"
+          />
+          <Link
+            className={cn(
+              buttonVariants({ size: "default", variant: "outline" }),
+              "gap-2",
+            )}
+            params={{ organizationSlug, projectSlug }}
+            to="/$organizationSlug/projects/$projectSlug/workloads"
+          >
+            <Workflow className="size-4 shrink-0" />
+            Add workload
+          </Link>
+        </div>
+
+        <div className="flex w-full max-w-xl flex-col gap-3 pt-2 sm:flex-row">
+          <Link
+            className={cn(
+              "flex flex-1 flex-col gap-2 rounded-xl border border-border bg-background p-4 text-left transition-colors hover:bg-muted/40",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            )}
+            params={{ organizationSlug, projectSlug }}
+            search={{}}
+            to="/$organizationSlug/projects/$projectSlug/databases"
+          >
+            <div className="flex size-10 items-center justify-center rounded-md border border-border bg-muted">
+              <Database className="text-muted-foreground size-4" />
+            </div>
+            <div className="min-w-0 space-y-1">
+              <p className="font-medium text-sm leading-none">
+                Postgres & branching
+              </p>
+              <p className="text-muted-foreground text-xs leading-snug">
+                Clusters and branches, SQL studio.
+              </p>
+            </div>
+          </Link>
+          <Link
+            className={cn(
+              "flex flex-1 flex-col gap-2 rounded-xl border border-border bg-background p-4 text-left transition-colors hover:bg-muted/40",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            )}
+            params={{ organizationSlug, projectSlug }}
+            to="/$organizationSlug/projects/$projectSlug/workloads"
+          >
+            <div className="flex size-10 items-center justify-center rounded-md border border-border bg-muted">
+              <Workflow className="text-muted-foreground size-4" />
+            </div>
+            <div className="min-w-0 space-y-1">
+              <p className="font-medium text-sm leading-none">
+                Containers & functions
+              </p>
+              <p className="text-muted-foreground text-xs leading-snug">
+                Containers and serverless beside Postgres.
+              </p>
+            </div>
+          </Link>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 interface ProjectOverviewProps {
   databases: DatabaseResponse[];
+  onCreateDatabase: (input: CreateDatabaseRequest) => Promise<void>;
   organizationSlug: string;
-  project: ProjectResponse;
   projectSlug: string;
   workloads: WorkloadResponse[];
 }
 
 function ProjectOverview({
   databases,
+  onCreateDatabase,
   organizationSlug,
-  project,
   projectSlug,
   workloads,
 }: ProjectOverviewProps) {
@@ -1914,30 +2023,25 @@ function ProjectOverview({
       </div>
 
       <div className="grid gap-3">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-4">
           <h2 className="font-semibold text-lg tracking-tight">Services</h2>
-          <Link
-            className="text-muted-foreground text-sm hover:text-foreground"
-            params={{ organizationSlug, projectSlug }}
-            to="/$organizationSlug/projects/$projectSlug/services"
-          >
-            View all →
-          </Link>
+          {services.length > 0 ? (
+            <Link
+              className="shrink-0 text-muted-foreground text-sm hover:text-foreground"
+              params={{ organizationSlug, projectSlug }}
+              to="/$organizationSlug/projects/$projectSlug/services"
+            >
+              View all →
+            </Link>
+          ) : null}
         </div>
         {services.length === 0 ? (
-          <Card>
-            <CardContent className="text-muted-foreground py-6 text-sm">
-              No services yet. Open the{" "}
-              <Link
-                className="text-foreground underline"
-                params={{ organizationSlug, projectSlug }}
-                to="/$organizationSlug/projects/$projectSlug/workloads"
-              >
-                Workloads
-              </Link>{" "}
-              tab to add one.
-            </CardContent>
-          </Card>
+          <ServicesEmptyState
+            databases={databases}
+            onCreateDatabase={onCreateDatabase}
+            organizationSlug={organizationSlug}
+            projectSlug={projectSlug}
+          />
         ) : (
           <ServicesGrid
             organizationSlug={organizationSlug}
@@ -1956,6 +2060,7 @@ type ServiceItem =
 
 interface ServicesPanelProps {
   databases: DatabaseResponse[];
+  onCreateDatabase: (input: CreateDatabaseRequest) => Promise<void>;
   organizationSlug: string;
   projectSlug: string;
   workloads: WorkloadResponse[];
@@ -1963,6 +2068,7 @@ interface ServicesPanelProps {
 
 function ServicesPanel({
   databases,
+  onCreateDatabase,
   organizationSlug,
   projectSlug,
   workloads,
@@ -1990,29 +2096,12 @@ function ServicesPanel({
 
   if (services.length === 0) {
     return (
-      <Card>
-        <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
-          <div className="flex size-12 items-center justify-center rounded-full border border-dashed border-border bg-muted/40">
-            <Boxes className="text-muted-foreground size-6" />
-          </div>
-          <div className="space-y-1">
-            <p className="font-medium text-sm">No services yet</p>
-            <p className="text-muted-foreground text-sm">
-              Add a database or workload to power this project.
-            </p>
-          </div>
-          <div className="flex flex-wrap justify-center gap-2">
-            <Link
-              className={cn(buttonVariants({ size: "sm" }))}
-              params={{ organizationSlug, projectSlug }}
-              to="/$organizationSlug/projects/$projectSlug/workloads"
-            >
-              <Workflow className="size-4" />
-              Add workload
-            </Link>
-          </div>
-        </CardContent>
-      </Card>
+      <ServicesEmptyState
+        databases={databases}
+        onCreateDatabase={onCreateDatabase}
+        organizationSlug={organizationSlug}
+        projectSlug={projectSlug}
+      />
     );
   }
 
@@ -2270,81 +2359,99 @@ function DatabaseStatusBadge({
 function DatabasesPanel({
   databases,
   focusedDatabaseId,
+  onCreateDatabase,
   organizationSlug,
   projectSlug,
 }: {
   databases: DatabaseResponse[];
   focusedDatabaseId?: string;
+  onCreateDatabase: (input: CreateDatabaseRequest) => Promise<void>;
   organizationSlug: string;
   projectSlug: string;
 }) {
-  if (databases.length === 0) {
-    return (
-      <Card>
-        <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
-          <div className="flex size-12 items-center justify-center rounded-full border border-dashed border-border bg-muted/40">
-            <Database className="text-muted-foreground size-6" />
-          </div>
-          <div className="space-y-1">
-            <p className="font-medium text-sm">No databases yet</p>
-            <p className="text-muted-foreground text-sm">
-              Create one to start adding branches.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
+  const existingNames = databases.map((d) => d.name);
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {databases.map((database) => (
-        <Link
-          className={cn(
-            "block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            focusedDatabaseId === database.id &&
-              "ring-2 ring-primary/35 ring-offset-2 ring-offset-background",
-          )}
-          key={database.id}
-          params={{
-            databaseId: database.id,
-            organizationSlug,
-            projectSlug,
-          }}
-          to="/$organizationSlug/projects/$projectSlug/databases/$databaseId"
-        >
-          <Card className="h-full transition-colors hover:bg-muted/30">
-            <CardHeader>
-              <div className="flex min-w-0 items-start justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-3">
-                  <div className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border bg-muted">
-                    <Database className="text-muted-foreground size-4" />
+    <div className="grid gap-4">
+      {databases.length > 0 ? (
+        <div className="flex justify-end">
+          <CreateDatabaseModal
+            existingNames={existingNames}
+            onCreateDatabase={onCreateDatabase}
+          />
+        </div>
+      ) : null}
+
+      {databases.length === 0 ? (
+        <Card>
+          <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
+            <div className="flex size-12 items-center justify-center rounded-full border border-dashed border-border bg-muted/40">
+              <Database className="text-muted-foreground size-6" />
+            </div>
+            <div className="space-y-1">
+              <p className="font-medium text-sm">No databases yet</p>
+              <p className="text-muted-foreground text-sm">
+                Create one to start adding branches.
+              </p>
+            </div>
+            <CreateDatabaseModal
+              existingNames={existingNames}
+              onCreateDatabase={onCreateDatabase}
+              triggerLabel="Create your first database"
+            />
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {databases.map((database) => (
+            <Link
+              className={cn(
+                "block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                focusedDatabaseId === database.id &&
+                  "ring-2 ring-primary/35 ring-offset-2 ring-offset-background",
+              )}
+              key={database.id}
+              params={{
+                databaseId: database.id,
+                organizationSlug,
+                projectSlug,
+              }}
+              to="/$organizationSlug/projects/$projectSlug/databases/$databaseId"
+            >
+              <Card className="h-full transition-colors hover:bg-muted/30">
+                <CardHeader>
+                  <div className="flex min-w-0 items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="flex size-10 shrink-0 items-center justify-center rounded-md border border-border bg-muted">
+                        <Database className="text-muted-foreground size-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <CardTitle className="truncate text-base">
+                          {database.name}
+                        </CardTitle>
+                        <CardDescription>
+                          Postgres {database.postgresVersion}
+                        </CardDescription>
+                      </div>
+                    </div>
+                    <DatabaseStatusBadge status={database.status} />
                   </div>
-                  <div className="min-w-0">
-                    <CardTitle className="truncate text-base">
-                      {database.name}
-                    </CardTitle>
-                    <CardDescription>
-                      Postgres {database.postgresVersion}
-                    </CardDescription>
-                  </div>
-                </div>
-                <DatabaseStatusBadge status={database.status} />
-              </div>
-            </CardHeader>
-            <CardContent className="grid gap-3">
-              <ResourceCardKeyRow
-                label="Endpoint"
-                value={database.endpoint?.hostname ?? "—"}
-              />
-              <ResourceCardKeyRow
-                label="Branches"
-                value={String(database.branches.length)}
-              />
-            </CardContent>
-          </Card>
-        </Link>
-      ))}
+                </CardHeader>
+                <CardContent className="grid gap-3">
+                  <ResourceCardKeyRow
+                    label="Endpoint"
+                    value={database.endpoint?.hostname ?? "—"}
+                  />
+                  <ResourceCardKeyRow
+                    label="Branches"
+                    value={String(database.branches.length)}
+                  />
+                </CardContent>
+              </Card>
+            </Link>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -2498,7 +2605,7 @@ function ConnectButton({
       {open ? (
         <div
           aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 text-left backdrop-blur-sm"
           role="dialog"
         >
           <div className="w-full max-w-xl rounded-xl border border-border bg-card text-card-foreground shadow-lg">
@@ -2639,6 +2746,167 @@ function ConnectButton({
   );
 }
 
+function CreateDatabaseModal({
+  existingNames,
+  onCreateDatabase,
+  triggerLabel = "New database",
+}: {
+  existingNames: string[];
+  onCreateDatabase: (input: CreateDatabaseRequest) => Promise<void>;
+  triggerLabel?: string;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [name, setName] = React.useState("");
+  const [postgresVersion, setPostgresVersion] = React.useState("18");
+  const [submitting, setSubmitting] = React.useState(false);
+  const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+
+  function closeModal() {
+    if (submitting) return;
+    setOpen(false);
+    setName("");
+    setPostgresVersion("18");
+    setErrorMessage(null);
+  }
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmedName = name.trim();
+    const trimmedVersion = postgresVersion.trim();
+
+    if (!trimmedName) {
+      setErrorMessage("Database name is required.");
+      return;
+    }
+
+    if (trimmedName.length > 63) {
+      setErrorMessage("Database name must be at most 63 characters.");
+      return;
+    }
+
+    if (existingNames.includes(trimmedName)) {
+      setErrorMessage("A database with this name already exists.");
+      return;
+    }
+
+    setSubmitting(true);
+    setErrorMessage(null);
+
+    try {
+      await onCreateDatabase({
+        name: trimmedName,
+        postgresVersion: trimmedVersion || "18",
+      });
+      setOpen(false);
+      setName("");
+      setPostgresVersion("18");
+      setErrorMessage(null);
+    } catch (err) {
+      setErrorMessage(
+        err instanceof Error ? err.message : "Failed to create database",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <>
+      <Button onClick={() => setOpen(true)} type="button">
+        <Plus className="size-4" />
+        {triggerLabel}
+      </Button>
+
+      {open ? (
+        <div
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 text-left backdrop-blur-sm"
+          role="dialog"
+        >
+          <form
+            className="w-full max-w-lg rounded-xl border border-border bg-card text-card-foreground shadow-lg"
+            onSubmit={(event) => void handleSubmit(event)}
+          >
+            <div className="flex items-start justify-between gap-4 border-border border-b p-4">
+              <div>
+                <h2 className="font-semibold text-lg tracking-tight">
+                  Create database
+                </h2>
+                <p className="text-muted-foreground text-sm">
+                  Provision a Postgres cluster in this project. You can add more
+                  clusters anytime.
+                </p>
+              </div>
+              <Button
+                aria-label="Close create database modal"
+                disabled={submitting}
+                onClick={closeModal}
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+              >
+                <X className="size-4" />
+              </Button>
+            </div>
+
+            <div className="space-y-5 p-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium" htmlFor="database-name">
+                  Cluster name
+                </label>
+                <Input
+                  autoFocus
+                  id="database-name"
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="analytics"
+                  value={name}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label
+                  className="text-sm font-medium"
+                  htmlFor="database-postgres-version"
+                >
+                  Postgres major version
+                </label>
+                <Input
+                  id="database-postgres-version"
+                  onChange={(event) =>
+                    setPostgresVersion(event.target.value)
+                  }
+                  placeholder="18"
+                  value={postgresVersion}
+                />
+              </div>
+
+              {errorMessage ? (
+                <p className="text-destructive text-sm" role="alert">
+                  {errorMessage}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="flex justify-end gap-2 border-border border-t p-4">
+              <Button
+                disabled={submitting}
+                onClick={closeModal}
+                type="button"
+                variant="outline"
+              >
+                Cancel
+              </Button>
+              <Button disabled={submitting} type="submit">
+                {submitting ? "Creating…" : "Create database"}
+              </Button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function CreateBranchModal({
   databases,
   onCreateBranch,
@@ -2760,7 +3028,7 @@ function CreateBranchModal({
       {open ? (
         <div
           aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 text-left backdrop-blur-sm"
           role="dialog"
         >
           <form

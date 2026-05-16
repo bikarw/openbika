@@ -132,18 +132,14 @@ export function WorkloadsPanel({
 }: WorkloadsPanelProps) {
   return (
     <div className="grid gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="font-semibold text-lg tracking-tight">Workloads</h2>
-          <p className="text-muted-foreground text-sm">
-            Container services and functions running alongside your databases.
-          </p>
+      {workloads.length > 0 ? (
+        <div className="flex justify-end">
+          <CreateWorkloadModal
+            existingNames={workloads.map((w) => w.name)}
+            onCreateWorkload={onCreateWorkload}
+          />
         </div>
-        <CreateWorkloadModal
-          existingNames={workloads.map((w) => w.name)}
-          onCreateWorkload={onCreateWorkload}
-        />
-      </div>
+      ) : null}
 
       {errorMessage ? (
         <p className="text-destructive text-sm" role="alert">
@@ -506,7 +502,7 @@ function CreateWorkloadModal({
       {open ? (
         <div
           aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 text-left backdrop-blur-sm"
           role="dialog"
         >
           <form

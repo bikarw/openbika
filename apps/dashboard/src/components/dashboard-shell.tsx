@@ -29,12 +29,10 @@ export function DashboardShell({
 }: DashboardShellProps) {
   return (
     <div className="min-h-dvh bg-background text-foreground">
-      <header className="grid h-16 border-border border-b md:grid-cols-[240px_1fr]">
-        <div className="flex min-w-0 items-center border-border p-3 md:border-r">
-          {orgSwitcher}
-        </div>
+      <header className="flex h-16 min-w-0 items-center justify-between gap-4 border-border border-b px-3">
+        <div className="flex min-w-0 items-center">{orgSwitcher}</div>
 
-        <div className="hidden items-center justify-end gap-2 px-4 md:flex lg:px-8">
+        <div className="hidden shrink-0 items-center justify-end gap-2 md:flex">
           {headerStatus === 'loading' ? (
             <Badge className="gap-1.5" variant="outline">
               <span className="size-1.5 animate-pulse rounded-full bg-muted-foreground" />

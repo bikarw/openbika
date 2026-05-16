@@ -183,10 +183,6 @@ function ProjectsRoutePage() {
       slug: fallbackSlug.length >= 2 ? fallbackSlug : `${fallbackSlug}-project`,
     });
 
-    await client.createDatabase(project.id, {
-      name: project.slug,
-    });
-
     await navigate({
       to: "/$organizationSlug/projects/$projectSlug",
       params: { organizationSlug, projectSlug: project.slug },

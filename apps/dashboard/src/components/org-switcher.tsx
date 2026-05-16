@@ -36,15 +36,18 @@ export function OrgSwitcher({
 
   if (pending && organizations.length === 0) {
     return (
-      <SidebarMenu>
+      <SidebarMenu className="inline-block max-w-xs min-w-0">
         <SidebarMenuItem>
-          <SidebarMenuButton disabled size="lg" type="button">
-            <div
-              className="flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground"
+          <SidebarMenuButton
+            className="w-full min-w-0"
+            disabled
+            size="lg"
+            type="button"
+          >
+            <Building2
+              className="size-4 shrink-0"
               data-slot="org-icon"
-            >
-              <Building2 className="size-4" />
-            </div>
+            />
             <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
               <span className="truncate font-medium text-muted-foreground">
                 Loading organizations…
@@ -58,15 +61,18 @@ export function OrgSwitcher({
 
   if (!active) {
     return (
-      <SidebarMenu>
+      <SidebarMenu className="inline-block max-w-xs min-w-0">
         <SidebarMenuItem>
-          <SidebarMenuButton disabled size="lg" type="button">
-            <div
-              className="flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground"
+          <SidebarMenuButton
+            className="w-full min-w-0"
+            disabled
+            size="lg"
+            type="button"
+          >
+            <Building2
+              className="size-4 shrink-0"
               data-slot="org-icon"
-            >
-              <Building2 className="size-4" />
-            </div>
+            />
             <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
               <span className="truncate font-medium">No organizations</span>
               <span className="truncate text-muted-foreground text-xs">
@@ -80,22 +86,17 @@ export function OrgSwitcher({
   }
 
   return (
-    <SidebarMenu>
+    <SidebarMenu className="inline-block max-w-xs min-w-0">
       <SidebarMenuItem>
         <DropdownMenu>
           <DropdownMenuTrigger asChild disabled={disabled}>
-            <SidebarMenuButton size="lg" type="button">
-              <div
-                className="flex aspect-square size-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground"
+            <SidebarMenuButton className="w-full min-w-0" size="lg" type="button">
+              <Building2
+                className="size-4 shrink-0"
                 data-slot="org-icon"
-              >
-                <Building2 className="size-4" />
-              </div>
+              />
               <div className="grid min-w-0 flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-medium">{active.name}</span>
-                <span className="truncate text-muted-foreground text-xs">
-                  {active.slug}
-                </span>
               </div>
               <ChevronsUpDown className="ml-auto size-4 shrink-0 opacity-60" />
             </SidebarMenuButton>
@@ -118,9 +119,7 @@ export function OrgSwitcher({
                 key={org.id}
                 onClick={() => onSelectOrganization(org.id)}
               >
-                <div className="flex size-6 shrink-0 items-center justify-center rounded-md border border-border bg-background">
-                  <Building2 className="size-3.5 shrink-0 opacity-70" />
-                </div>
+                <Building2 className="size-4 shrink-0 opacity-70" />
                 <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                   <span className="truncate font-medium">{org.name}</span>
                   <span className="truncate text-muted-foreground text-xs">
