@@ -75,6 +75,68 @@ export const organizationResponseSchema = z.object({
 });
 export type OrganizationResponse = z.infer<typeof organizationResponseSchema>;
 
+export const serverDomainCertificateTypeSchema = z.enum([
+  "letsencrypt",
+  "none",
+]);
+export type ServerDomainCertificateType = z.infer<
+  typeof serverDomainCertificateTypeSchema
+>;
+
+export const serverDomainApplyStatusSchema = z.enum([
+  "applied",
+  "failed",
+  "not_configured",
+]);
+export type ServerDomainApplyStatus = z.infer<
+  typeof serverDomainApplyStatusSchema
+>;
+
+export const serverDomainSettingsResponseSchema = z.object({
+  applyStatus: serverDomainApplyStatusSchema,
+  certificateType: serverDomainCertificateTypeSchema,
+  host: z.string().nullable(),
+  https: z.boolean(),
+  id: idSchema,
+  lastAppliedAt: z.string().nullable(),
+  lastError: z.string().nullable(),
+  letsEncryptEmail: z.string().nullable(),
+  updatedAt: z.string(),
+});
+export type ServerDomainSettingsResponse = z.infer<
+  typeof serverDomainSettingsResponseSchema
+>;
+
+export const patchServerDomainSettingsRequestSchema = z
+  .object({
+    certificateType: serverDomainCertificateTypeSchema.optional(),
+    host: z.string().nullable().optional(),
+    https: z.boolean().optional(),
+    letsEncryptEmail: z
+      .union([z.string().email(), z.literal(""), z.null()])
+      .optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.https !== true) return;
+    const certificateType = value.certificateType ?? "letsencrypt";
+    if (certificateType !== "letsencrypt") return;
+    if (
+      value.letsEncryptEmail === null ||
+      value.letsEncryptEmail === undefined ||
+      value.letsEncryptEmail === ""
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Let's Encrypt email is required when automatic SSL is enabled",
+        path: ["letsEncryptEmail"],
+      });
+    }
+  });
+export type PatchServerDomainSettingsRequest = z.infer<
+  typeof patchServerDomainSettingsRequestSchema
+>;
+
 export const createProjectRequestSchema = z.object({
   name: z.string().min(1).max(120),
   organizationId: idSchema,
@@ -341,6 +403,26 @@ export const MAX_WORKLOAD_INGRESS_HOSTNAMES = MAX_WORKLOAD_INGRESS_DOMAINS;
  * Validates and normalizes a user-supplied ingress hostname for the network
  * `Host` Traefik matcher (ASCII / punycode via URL).
  */
+export function normalizeServerDomainHost(raw: string): string {
+  const trimmed = raw.trim();
+  const withScheme = trimmed.includes("://") ? trimmed : `http://${trimmed}`;
+  try {
+    const parsed = new URL(withScheme);
+    if (parsed.port) {
+      throw new Error("Server domain must not include a port");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("port")) {
+      throw error;
+    }
+  }
+  const host = normalizeWorkloadCustomHostname(trimmed);
+  if (host.includes(":")) {
+    throw new Error("Server domain must not include a port");
+  }
+  return host;
+}
+
 export function normalizeWorkloadCustomHostname(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {

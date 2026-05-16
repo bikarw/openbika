@@ -174,8 +174,10 @@ function ProjectsRoutePage() {
 
   return (
     <DashboardShell
+      activeNav="projects"
       headerStatus={healthStatus}
       onSignOut={handleSignOut}
+      organizationSlug={organizationSlug}
       orgSwitcher={
         <OrgSwitcher
           disabled={pending && organizations.length === 0}

@@ -170,6 +170,27 @@ export const memberships = pgTable(
   }),
 );
 
+export const webServerSettings = pgTable(
+  "web_server_settings",
+  {
+    id: text("id").primaryKey(),
+    singletonKey: text("singleton_key").notNull().default("default"),
+    host: text("host"),
+    https: boolean("https").default(false).notNull(),
+    certificateType: text("certificate_type").notNull().default("none"),
+    letsEncryptEmail: text("lets_encrypt_email"),
+    applyStatus: text("apply_status").notNull().default("not_configured"),
+    lastAppliedAt: timestamp("last_applied_at", { withTimezone: true }),
+    lastError: text("last_error"),
+    ...timestamps,
+  },
+  (table) => ({
+    singletonKeyIdx: uniqueIndex("web_server_settings_singleton_key_idx").on(
+      table.singletonKey,
+    ),
+  }),
+);
+
 export const providers = pgTable(
   "providers",
   {

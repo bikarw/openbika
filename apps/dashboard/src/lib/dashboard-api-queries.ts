@@ -3,6 +3,7 @@ import type {
   CreateDatabaseRequest,
   CreateProjectRequest,
   CreateWorkloadRequest,
+  PatchServerDomainSettingsRequest,
   PatchWorkloadEnvRequest,
   PatchWorkloadIngressDomainsRequest,
 } from "@openbika/contracts";
@@ -14,6 +15,8 @@ export const dashboardKeys = {
   root: ["dashboard-api"] as const,
   organizations: () => [...dashboardKeys.root, "organizations"] as const,
   health: () => [...dashboardKeys.root, "health"] as const,
+  serverDomainSettings: () =>
+    [...dashboardKeys.root, "server-domain-settings"] as const,
   projects: (organizationId: string) =>
     [...dashboardKeys.root, "projects", organizationId] as const,
   projectSummaries: (organizationId: string) =>
@@ -45,6 +48,16 @@ export async function fetchHealthOk(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+export async function fetchServerDomainSettings() {
+  return getDashboardApiClient().getServerDomainSettings();
+}
+
+export async function patchServerDomainSettingsRequest(
+  input: PatchServerDomainSettingsRequest,
+) {
+  return getDashboardApiClient().patchServerDomainSettings(input);
 }
 
 export async function fetchProjects(organizationId: string) {

@@ -16,6 +16,7 @@ export type EntityPrefix =
   | "ep"
   | "bkp"
   | "rst"
+  | "wss"
   | "wkl";
 
 const prefixMap = {
@@ -28,6 +29,7 @@ const prefixMap = {
   project: "prj",
   project_workload: "wkl",
   restore_job: "rst",
+  web_server_settings: "wss",
 } as const satisfies Record<string, EntityPrefix>;
 
 export type EntityKind = keyof typeof prefixMap;

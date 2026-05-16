@@ -36,6 +36,13 @@
       "when": 1778452603972,
       "tag": "0004_spicy_azazel",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1778935728897,
+      "tag": "0006_sloppy_sentinels",
+      "breakpoints": true
     }
   ]
 }

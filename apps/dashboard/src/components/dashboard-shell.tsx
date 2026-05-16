@@ -1,5 +1,6 @@
 import type * as React from 'react'
-import { Boxes, LogOut } from 'lucide-react'
+import { useNavigate } from '@tanstack/react-router'
+import { Boxes, LogOut, Settings } from 'lucide-react'
 
 import { Badge } from '@openbika/ui/components/badge'
 import { Button } from '@openbika/ui/components/button'
@@ -17,18 +18,35 @@ import {
 } from '@openbika/ui/components/sidebar'
 
 export interface DashboardShellProps {
+  activeNav?: 'projects' | 'settings'
   children: React.ReactNode
   headerStatus?: 'error' | 'loading' | 'ok' | null
   onSignOut: () => void
+  organizationSlug?: string
   orgSwitcher: React.ReactNode
 }
 
 export function DashboardShell({
+  activeNav = 'projects',
   children,
   headerStatus,
   onSignOut,
+  organizationSlug,
   orgSwitcher,
 }: DashboardShellProps) {
+  const navigate = useNavigate()
+
+  function navigateTo(path: 'projects' | 'settings') {
+    if (!organizationSlug) return
+    void navigate({
+      to:
+        path === 'projects'
+          ? '/$organizationSlug/projects'
+          : '/$organizationSlug/settings',
+      params: { organizationSlug },
+    })
+  }
+
   return (
     <div className="min-h-dvh bg-background text-foreground">
       <header className="flex h-16 min-w-0 items-center justify-between gap-4 border-border border-b px-3">
@@ -57,9 +75,21 @@ export function DashboardShell({
             <SidebarGroup>
               <SidebarMenu>
                 <SidebarMenuItem>
-                  <SidebarMenuButton isActive>
+                  <SidebarMenuButton
+                    isActive={activeNav === 'projects'}
+                    onClick={() => navigateTo('projects')}
+                  >
                     <Boxes className="size-4" />
                     Projects
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    isActive={activeNav === 'settings'}
+                    onClick={() => navigateTo('settings')}
+                  >
+                    <Settings className="size-4" />
+                    Settings
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               </SidebarMenu>

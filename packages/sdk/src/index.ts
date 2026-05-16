@@ -25,11 +25,14 @@ import {
   type ProjectResponse,
   type PatchWorkloadEnvRequest,
   type PatchWorkloadIngressDomainsRequest,
+  type PatchServerDomainSettingsRequest,
   projectResponseSchema,
   type ProjectSummaryResponse,
   projectSummaryResponseSchema,
   type RestoreJobResponse,
   restoreJobResponseSchema,
+  type ServerDomainSettingsResponse,
+  serverDomainSettingsResponseSchema,
   type WorkloadResponse,
   workloadResponseSchema,
   type WorkloadRuntimeLogsResponse,
@@ -150,6 +153,30 @@ export class OpenbikaClient {
       parse: (body) =>
         organizationResponseSchema.parse(readProperty(body, "organization")),
       path: "/v1/organizations",
+    });
+  }
+
+  async getServerDomainSettings(): Promise<ServerDomainSettingsResponse> {
+    return this.request({
+      parse: (body) =>
+        serverDomainSettingsResponseSchema.parse(
+          readProperty(body, "settings"),
+        ),
+      path: "/v1/settings/server-domain",
+    });
+  }
+
+  async patchServerDomainSettings(
+    input: PatchServerDomainSettingsRequest,
+  ): Promise<ServerDomainSettingsResponse> {
+    return this.request({
+      body: input,
+      method: "PATCH",
+      parse: (body) =>
+        serverDomainSettingsResponseSchema.parse(
+          readProperty(body, "settings"),
+        ),
+      path: "/v1/settings/server-domain",
     });
   }
 

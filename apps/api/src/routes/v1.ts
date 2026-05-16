@@ -11,7 +11,9 @@ import {
   dedupeWorkloadIngressDomains,
   executeBranchQueryRequestSchema,
   normalizeIngressFreeDnsZone,
+  normalizeServerDomainHost,
   parseIngressEmbeddedPublicIpv4,
+  patchServerDomainSettingsRequestSchema,
   patchWorkloadIngressDomainsRequestSchema,
   patchWorkloadEnvRequestSchema,
   pruneBlankWorkloadEnv,
@@ -24,6 +26,8 @@ import {
   type BranchSchemaTableResponse,
   type DatabaseResponse,
   type ProvisionWorkloadInput,
+  type ServerDomainCertificateType,
+  type ServerDomainSettingsResponse,
   type WorkloadResponse,
 } from "@openbika/contracts";
 import { createPool, schema } from "@openbika/db";
@@ -45,6 +49,7 @@ import {
   startControlPlaneWorkflow,
   WorkflowDispatchError,
 } from "../workflows.js";
+import { applyServerDomainSettings } from "../server-domain-settings.js";
 
 interface CreateV1RoutesOptions {
   env: ApiEnv;
@@ -102,6 +107,8 @@ interface SerializableBranch {
 }
 
 type SerializableWorkload = typeof schema.projectWorkloads.$inferSelect;
+type SerializableWebServerSettings =
+  typeof schema.webServerSettings.$inferSelect;
 
 interface WorkloadProvisioningTarget {
   id: string;
@@ -261,6 +268,99 @@ async function assertOrganizationAccess({
   }
 
   return membership;
+}
+
+async function assertServerAdmin({
+  db,
+  userId,
+}: {
+  db: ControlPlaneDb;
+  userId: string;
+}) {
+  const memberships = await db
+    .select({ role: schema.memberships.role })
+    .from(schema.memberships)
+    .where(eq(schema.memberships.userId, userId));
+
+  const hasAdminMembership = memberships.some(
+    (membership) =>
+      membership.role === "owner" || membership.role === "admin",
+  );
+
+  if (!hasAdminMembership) {
+    throw new HTTPException(403, {
+      message: "Server administrator access required",
+    });
+  }
+}
+
+async function readWebServerSettings(
+  db: ControlPlaneDb,
+): Promise<SerializableWebServerSettings> {
+  const existing = first(
+    await db.select().from(schema.webServerSettings).limit(1),
+  );
+
+  if (existing) {
+    return existing;
+  }
+
+  const id = createId("web_server_settings");
+  await db
+    .insert(schema.webServerSettings)
+    .values({ id })
+    .catch(() => undefined);
+
+  const created = first(
+    await db.select().from(schema.webServerSettings).limit(1),
+  );
+
+  if (!created) {
+    throw new HTTPException(500, {
+      message: "Could not initialize server domain settings",
+    });
+  }
+
+  return created;
+}
+
+function serializeWebServerSettings(
+  settings: SerializableWebServerSettings,
+): ServerDomainSettingsResponse {
+  const certificateType: ServerDomainCertificateType =
+    settings.certificateType === "letsencrypt" ? "letsencrypt" : "none";
+  const applyStatus =
+    settings.applyStatus === "applied" || settings.applyStatus === "failed"
+      ? settings.applyStatus
+      : "not_configured";
+
+  return {
+    applyStatus,
+    certificateType,
+    host: settings.host,
+    https: settings.https,
+    id: settings.id,
+    lastAppliedAt: settings.lastAppliedAt?.toISOString() ?? null,
+    lastError: settings.lastError,
+    letsEncryptEmail: settings.letsEncryptEmail,
+    updatedAt: settings.updatedAt.toISOString(),
+  };
+}
+
+function normalizeNullableServerDomain(raw: string | null): string | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return normalizeServerDomainHost(trimmed);
+}
+
+function normalizeNullableEmail(raw: string | null | undefined): string | null {
+  if (raw === null || raw === undefined) {
+    return null;
+  }
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 async function assertProjectAccess({
@@ -1083,6 +1183,133 @@ async function startWorkloadProvisioning({
 
 export function createV1Routes({ env }: CreateV1RoutesOptions) {
   const routes = new Hono<ApiBindings>();
+
+  routes.get("/settings/server-domain", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+
+    await assertServerAdmin({ db, userId: user.id });
+
+    const settings = await readWebServerSettings(db);
+    return c.json({
+      settings: serializeWebServerSettings(settings),
+    });
+  });
+
+  routes.patch("/settings/server-domain", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+
+    await assertServerAdmin({ db, userId: user.id });
+
+    const body = await parseJson(c, patchServerDomainSettingsRequestSchema);
+    const current = await readWebServerSettings(db);
+
+    let nextHost: string | null;
+    try {
+      nextHost =
+        body.host === undefined
+          ? current.host
+          : normalizeNullableServerDomain(body.host);
+    } catch (error) {
+      throw new HTTPException(400, {
+        message:
+          error instanceof Error ? error.message : "Invalid server domain",
+      });
+    }
+
+    const nextHttps = body.https ?? current.https;
+    const nextCertificateType: ServerDomainCertificateType = nextHttps
+      ? (body.certificateType ?? "letsencrypt")
+      : "none";
+    const nextLetsEncryptEmail =
+      body.letsEncryptEmail === undefined
+        ? current.letsEncryptEmail
+        : normalizeNullableEmail(body.letsEncryptEmail);
+
+    if (nextHttps && !nextHost) {
+      throw new HTTPException(400, {
+        message: "Server domain is required when automatic SSL is enabled",
+      });
+    }
+
+    if (nextHttps && nextCertificateType === "letsencrypt") {
+      if (!nextLetsEncryptEmail) {
+        throw new HTTPException(400, {
+          message:
+            "Let's Encrypt email is required when automatic SSL is enabled",
+        });
+      }
+    }
+
+    const baseUpdate = {
+      applyStatus: "not_configured",
+      certificateType: nextCertificateType,
+      host: nextHost,
+      https: nextHttps,
+      lastError: null,
+      letsEncryptEmail: nextLetsEncryptEmail,
+      updatedAt: new Date(),
+    };
+
+    const saved = first(
+      await db
+        .update(schema.webServerSettings)
+        .set(baseUpdate)
+        .where(eq(schema.webServerSettings.id, current.id))
+        .returning(),
+    );
+
+    if (!saved) {
+      throw new HTTPException(500, {
+        message: "Could not save server domain settings",
+      });
+    }
+
+    try {
+      await applyServerDomainSettings({
+        certificateType: nextCertificateType,
+        env,
+        host: nextHost,
+        https: nextHttps,
+        letsEncryptEmail: nextLetsEncryptEmail,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not apply server domain settings";
+
+      await db
+        .update(schema.webServerSettings)
+        .set({
+          applyStatus: "failed",
+          lastError: message,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.webServerSettings.id, current.id));
+
+      throw new HTTPException(500, { message });
+    }
+
+    const applyStatus = nextHost ? "applied" : "not_configured";
+    const applied = first(
+      await db
+        .update(schema.webServerSettings)
+        .set({
+          applyStatus,
+          lastAppliedAt: new Date(),
+          lastError: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.webServerSettings.id, current.id))
+        .returning(),
+    );
+
+    return c.json({
+      settings: serializeWebServerSettings(applied ?? saved),
+    });
+  });
 
   routes.get("/organizations", async (c) => {
     const user = requireUser(c);

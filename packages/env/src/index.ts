@@ -52,6 +52,12 @@ export const apiEnvSchema = baseEnvSchema.extend({
    * When nip.io/sslip ingress is configured, HTTP stays on `:80` (no Traefik redirect) so links work before Let’s Encrypt and HTTP-01 is less fragile. Set `true` on the worker to force HTTPS links + redirect (owned-domain default).
    */
   OPENBIKA_TRAEFIK_SECURE_INGRESS: z.enum(["true", "false"]).optional(),
+  /** Directory watched by Traefik's file provider for dynamic OpenBika router config. */
+  OPENBIKA_TRAEFIK_DYNAMIC_DIR: z.string().optional(),
+  /** Main Traefik static config path; used to update the Let's Encrypt account email when writable. */
+  OPENBIKA_TRAEFIK_MAIN_CONFIG: z.string().optional(),
+  /** Docker Compose .env path; used as a fallback for OPENBIKA_TRAEFIK_ACME_EMAIL. */
+  OPENBIKA_TRAEFIK_COMPOSE_ENV: z.string().optional(),
 });
 
 export const workerEnvSchema = baseEnvSchema.extend({
