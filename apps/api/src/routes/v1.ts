@@ -546,15 +546,48 @@ async function loadBranchEndpoint({
       .limit(1),
   );
 
+  if (endpoint) {
+    return endpoint;
+  }
+
+  const clusterEndpoint = first(
+    await db
+      .select()
+      .from(schema.endpoints)
+      .where(eq(schema.endpoints.clusterId, database.id))
+      .limit(1),
+  );
+
+  if (clusterEndpoint) {
+    return clusterEndpoint;
+  }
+
   return (
-    endpoint ??
     first(
       await db
-        .select()
-        .from(schema.endpoints)
-        .where(eq(schema.endpoints.clusterId, database.id))
-        .limit(1),
-    )
+        .insert(schema.endpoints)
+        .values({
+          branchId: branch.id,
+          clusterId: database.id,
+          hostname: "localhost",
+          id: createId("endpoint"),
+          poolerMode: "transaction",
+          port: 5432,
+        })
+        .onConflictDoUpdate({
+          set: {
+            branchId: branch.id,
+            poolerMode: "transaction",
+            updatedAt: new Date(),
+          },
+          target: [
+            schema.endpoints.clusterId,
+            schema.endpoints.hostname,
+            schema.endpoints.port,
+          ],
+        })
+        .returning(),
+    ) ?? null
   );
 }
 

@@ -521,12 +521,15 @@ export async function provisionClusterActivity(
         .onConflictDoUpdate({
           set: {
             branchId: mainBranch?.id ?? null,
-            clusterId: input.clusterId,
             poolerMode: result.endpoint.poolerMode,
             port: result.endpoint.port,
             updatedAt: new Date(),
           },
-          target: schema.endpoints.hostname,
+          target: [
+            schema.endpoints.clusterId,
+            schema.endpoints.hostname,
+            schema.endpoints.port,
+          ],
         });
     });
 

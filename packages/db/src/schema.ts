@@ -323,7 +323,11 @@ export const endpoints = pgTable(
     ...timestamps,
   },
   (table) => ({
-    hostnameIdx: uniqueIndex("endpoints_hostname_idx").on(table.hostname),
+    clusterHostnamePortIdx: uniqueIndex("endpoints_cluster_hostname_port_idx").on(
+      table.clusterId,
+      table.hostname,
+      table.port,
+    ),
   }),
 );
 

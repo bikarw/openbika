@@ -50,6 +50,13 @@
       "when": 1778967152245,
       "tag": "0007_free_impossible_man",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1778968883833,
+      "tag": "0008_rare_black_tom",
+      "breakpoints": true
     }
   ]
 }
