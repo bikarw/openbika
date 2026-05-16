@@ -31,6 +31,32 @@ bun run lint
 bun run build
 ```
 
+## One-Time Server Install
+
+On a fresh Ubuntu/Debian VPS, run the installer as root. It installs Docker,
+Bun, clones `https://github.com/bikarw/openbika`, starts Postgres/Temporal/
+Traefik, runs migrations, and registers the API and worker as systemd services.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/bikarw/openbika/main/scripts/install.sh | sudo bash
+```
+
+Useful production options:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/bikarw/openbika/main/scripts/install.sh | sudo bash -s -- \
+  --api-public-url https://api.example.com \
+  --web-origin https://app.example.com \
+  --acme-email admin@example.com
+```
+
+After install:
+
+```sh
+systemctl status openbika-api openbika-worker
+journalctl -u openbika-api -u openbika-worker -f
+```
+
 ## Local API Setup On This Mac
 
 1. Install dependencies and create your local environment file.
