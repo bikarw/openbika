@@ -57,6 +57,19 @@ systemctl status openbika-api openbika-worker
 journalctl -u openbika-api -u openbika-worker -f
 ```
 
+To uninstall the systemd services and stop the Docker stack while keeping
+persistent data:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/bikarw/openbika/main/scripts/uninstall.sh | sudo bash
+```
+
+To remove the checkout, Docker volumes, and service user too:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/bikarw/openbika/main/scripts/uninstall.sh | sudo bash -s -- --purge-data
+```
+
 ## Local API Setup On This Mac
 
 1. Install dependencies and create your local environment file.

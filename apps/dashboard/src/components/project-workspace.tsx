@@ -3034,8 +3034,11 @@ export function DatabaseResourceOverviewOutlet({
     useProjectWorkspaceOutlet();
 
   const database = databases.find((item) => item.id === databaseId) ?? null;
+  const databaseBranches = branches.filter(
+    (row) => row.database.id === databaseId,
+  );
   const studioBranchAnchor =
-    branches.find((row) => row.database.id === databaseId) ?? null;
+    databaseBranches[0] ?? null;
 
   if (!database) {
     return (
@@ -3065,6 +3068,10 @@ export function DatabaseResourceOverviewOutlet({
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <DatabaseStatusBadge status={database.status} />
+          <ConnectButton
+            branches={databaseBranches}
+            selectedBranch={studioBranchAnchor}
+          />
           <CreateBranchModal
             databases={[database]}
             onCreateBranch={onCreateBranch}
@@ -3441,7 +3448,9 @@ export function BranchWorkspaceView({
 
   switch (view) {
     case "overview":
-      return <BranchOverview selectedBranch={selectedBranch} />;
+      return (
+        <BranchOverview branches={branches} selectedBranch={selectedBranch} />
+      );
     case "sql":
       return (
         <SqlEditor
@@ -3466,51 +3475,64 @@ export function BranchWorkspaceView({
 }
 
 function BranchOverview({
+  branches,
   selectedBranch,
 }: {
+  branches: WorkspaceBranch[];
   selectedBranch: WorkspaceBranch;
 }) {
+  const databaseBranches = branches.filter(
+    (row) => row.database.id === selectedBranch.database.id,
+  );
+
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      <SummaryCard
-        icon={<GitBranch className="text-muted-foreground size-4" />}
-        label="Branch"
-        value={selectedBranch.branch.name}
+    <div className="grid gap-4">
+      <ConnectButton
+        branches={databaseBranches}
+        selectedBranch={selectedBranch}
       />
-      <SummaryCard
-        icon={<Database className="text-muted-foreground size-4" />}
-        label="Database"
-        value={selectedBranch.database.name}
-      />
-      <Card className="sm:col-span-2">
-        <CardHeader>
-          <CardTitle>Branch details</CardTitle>
-          <CardDescription>
-            Basic metadata for the selected branch.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-3">
-          <MetadataItem label="Status" value={selectedBranch.branch.status} />
-          <MetadataItem
-            label="Parent"
-            value={selectedBranch.branch.parentBranchId ?? "None"}
-          />
-          <MetadataItem
-            label="Copy mode"
-            value={branchCopyModeLabel(selectedBranch.branch.copyMode)}
-          />
-          <MetadataItem
-            label="Expiration"
-            value={branchExpirationLabel(selectedBranch.branch.expiresAt)}
-          />
-          <MetadataItem
-            label="Endpoint"
-            value={
-              selectedBranch.database.endpoint?.hostname ?? "Not available"
-            }
-          />
-        </CardContent>
-      </Card>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <SummaryCard
+          icon={<GitBranch className="text-muted-foreground size-4" />}
+          label="Branch"
+          value={selectedBranch.branch.name}
+        />
+        <SummaryCard
+          icon={<Database className="text-muted-foreground size-4" />}
+          label="Database"
+          value={selectedBranch.database.name}
+        />
+        <Card className="sm:col-span-2">
+          <CardHeader>
+            <CardTitle>Branch details</CardTitle>
+            <CardDescription>
+              Basic metadata for the selected branch.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 sm:grid-cols-3">
+            <MetadataItem label="Status" value={selectedBranch.branch.status} />
+            <MetadataItem
+              label="Parent"
+              value={selectedBranch.branch.parentBranchId ?? "None"}
+            />
+            <MetadataItem
+              label="Copy mode"
+              value={branchCopyModeLabel(selectedBranch.branch.copyMode)}
+            />
+            <MetadataItem
+              label="Expiration"
+              value={branchExpirationLabel(selectedBranch.branch.expiresAt)}
+            />
+            <MetadataItem
+              label="Endpoint"
+              value={
+                selectedBranch.database.endpoint?.hostname ?? "Not available"
+              }
+            />
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

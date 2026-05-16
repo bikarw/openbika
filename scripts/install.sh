@@ -302,13 +302,11 @@ start_compose() {
   exit 1
 }
 
-run_migrations_and_build() {
-  log "Running migrations and build"
+run_migrations() {
+  log "Running migrations"
   local env_file
   env_file="$(printf "%q" "$INSTALL_DIR/.env")"
   run_in_install_dir "/usr/local/bin/bun --env-file=$env_file run db:migrate"
-  remove_typescript_build_metadata
-  run_in_install_dir "/usr/local/bin/bun --env-file=$env_file run build"
 }
 
 write_systemd_units() {
@@ -434,7 +432,7 @@ main() {
   write_env_files
   install_dependencies
   start_compose
-  run_migrations_and_build
+  run_migrations
   write_systemd_units
   check_health
 }
