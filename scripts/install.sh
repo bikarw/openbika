@@ -118,6 +118,24 @@ run_in_install_dir() {
   run_as_service_user bash -lc "cd $dir && $*"
 }
 
+restore_tracked_typescript_build_metadata() {
+  if [[ ! -d "$INSTALL_DIR/.git" ]]; then
+    return
+  fi
+
+  log "Restoring tracked TypeScript build metadata"
+  run_in_install_dir "git ls-files -z -- ':(glob)**/tsconfig.tsbuildinfo' | xargs -0r git checkout --"
+}
+
+remove_typescript_build_metadata() {
+  if [[ ! -d "$INSTALL_DIR/.git" ]]; then
+    return
+  fi
+
+  log "Removing generated TypeScript build metadata"
+  run_in_install_dir "find . -name tsconfig.tsbuildinfo -type f -delete"
+}
+
 install_packages() {
   log "Installing system packages"
   apt-get update
@@ -167,9 +185,11 @@ ensure_service_user() {
 checkout_repo() {
   log "Checking out $REPO_URL#$BRANCH"
   if [[ -d "$INSTALL_DIR/.git" ]]; then
+    restore_tracked_typescript_build_metadata
     run_as_service_user git -C "$INSTALL_DIR" fetch --prune origin
     run_as_service_user git -C "$INSTALL_DIR" checkout "$BRANCH"
     run_as_service_user git -C "$INSTALL_DIR" pull --ff-only origin "$BRANCH"
+    remove_typescript_build_metadata
     return
   fi
 
@@ -271,6 +291,7 @@ run_migrations_and_build() {
   local env_file
   env_file="$(printf "%q" "$INSTALL_DIR/.env")"
   run_in_install_dir "/usr/local/bin/bun --env-file=$env_file run db:migrate"
+  remove_typescript_build_metadata
   run_in_install_dir "/usr/local/bin/bun run build"
 }
 
