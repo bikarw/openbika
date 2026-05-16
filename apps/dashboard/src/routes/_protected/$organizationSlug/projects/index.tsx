@@ -3,6 +3,7 @@ import {
   useNavigate,
   useRouter,
 } from "@tanstack/react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   OrganizationResponse,
   ProjectSummaryResponse,
@@ -13,7 +14,13 @@ import { authClient } from "#/auth-client";
 import { DashboardShell } from "#/components/dashboard-shell";
 import { OrgSwitcher } from "#/components/org-switcher";
 import { ProjectsPanel } from "#/components/projects-panel";
-import { getDashboardApiClient } from "#/lib/openbika-client";
+import {
+  createProjectRequest,
+  dashboardKeys,
+  fetchHealthOk,
+  fetchOrganizations,
+  fetchProjectSummaries,
+} from "#/lib/dashboard-api-queries";
 import {
   readStoredOrganizationId,
   writeStoredOrganizationId,
@@ -41,117 +48,87 @@ function ProjectsRoutePage() {
   const { organizationSlug } = Route.useParams();
   const router = useRouter();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
-  const [organizations, setOrganizations] = React.useState<
-    OrganizationResponse[]
-  >([]);
-  const [summaries, setSummaries] = React.useState<ProjectSummaryResponse[]>(
-    [],
-  );
-  const [loadError, setLoadError] = React.useState<string | null>(null);
-  const [pending, setPending] = React.useState(true);
-  const [healthStatus, setHealthStatus] = React.useState<
-    "error" | "loading" | "ok" | null
-  >(null);
+  const orgsQuery = useQuery({
+    queryKey: dashboardKeys.organizations(),
+    queryFn: fetchOrganizations,
+  });
 
-  const selectedOrganizationId =
+  const organizations = orgsQuery.data ?? [];
+  const orgId =
     organizations.find((o) => o.slug === organizationSlug)?.id ?? null;
-  const hasProvisioning = summaries.some(
-    (summary) =>
-      summary.organizationId === selectedOrganizationId &&
-      summary.isProvisioning,
-  );
 
   React.useEffect(() => {
-    let cancelled = false;
-    const client = getDashboardApiClient();
-
-    async function load(showLoading: boolean) {
-      if (showLoading) {
-        setPending(true);
-        setLoadError(null);
-        setHealthStatus("loading");
-      }
-
-      try {
-        const healthPromise = client.health().then(
-          () => true as const,
-          () => false as const,
-        );
-        const orgs = await client.listOrganizations();
-        if (cancelled) return;
-
-        const active = orgs.find((org) => org.slug === organizationSlug);
-        if (!active) {
-          const fallback = pickOrganization(orgs);
-          setOrganizations(orgs);
-          setSummaries([]);
-
-          if (!fallback) {
-            setLoadError("No organizations available.");
-            setHealthStatus("error");
-            return;
-          }
-
-          await navigate({
-            to: "/$organizationSlug/projects",
-            params: { organizationSlug: fallback.slug },
-            replace: true,
-          });
-          return;
-        }
-
-        writeStoredOrganizationId(active.id);
-
-        const [nextSummaries, healthy] = await Promise.all([
-          client.listProjectSummaries(active.id),
-          healthPromise,
-        ]);
-        if (cancelled) return;
-
-        setOrganizations(orgs);
-        setSummaries(nextSummaries);
-        setHealthStatus(healthy ? "ok" : "error");
-      } catch (err) {
-        if (cancelled) return;
-        setLoadError(
-          err instanceof Error ? err.message : "Failed to load dashboard data",
-        );
-        setSummaries([]);
-        setHealthStatus("error");
-      } finally {
-        if (!cancelled && showLoading) setPending(false);
-      }
+    if (!orgsQuery.data || orgsQuery.isPending) return;
+    const active = orgsQuery.data.find((o) => o.slug === organizationSlug);
+    if (active) {
+      writeStoredOrganizationId(active.id);
+      return;
     }
+    const fallback = pickOrganization(orgsQuery.data);
+    if (!fallback) return;
+    void navigate({
+      to: "/$organizationSlug/projects",
+      params: { organizationSlug: fallback.slug },
+      replace: true,
+    });
+  }, [orgsQuery.data, orgsQuery.isPending, organizationSlug, navigate]);
 
-    void load(true);
-    return () => {
-      cancelled = true;
-    };
-  }, [navigate, organizationSlug]);
+  const healthQuery = useQuery({
+    queryKey: dashboardKeys.health(),
+    queryFn: fetchHealthOk,
+  });
 
-  React.useEffect(() => {
-    if (!hasProvisioning) return;
+  const summariesQuery = useQuery({
+    queryKey: dashboardKeys.projectSummaries(orgId ?? ""),
+    queryFn: () => fetchProjectSummaries(orgId!),
+    enabled: Boolean(orgId),
+    refetchInterval: (query) => {
+      const list = query.state.data as ProjectSummaryResponse[] | undefined;
+      if (!list) return false;
+      const hasProvisioning = list.some(
+        (summary) =>
+          summary.organizationId === orgId && summary.isProvisioning,
+      );
+      return hasProvisioning ? 3_000 : false;
+    },
+  });
 
-    const client = getDashboardApiClient();
-    const orgId = selectedOrganizationId;
-    if (!orgId) return;
+  const summaries = summariesQuery.data ?? [];
+  const selectedOrganizationId = orgId;
 
-    let cancelled = false;
-    const intervalId = window.setInterval(() => {
-      void client
-        .listProjectSummaries(orgId)
-        .then((next) => {
-          if (!cancelled) setSummaries(next);
-        })
-        .catch(() => undefined);
-    }, 3_000);
+  const pending =
+    orgsQuery.isPending || (!!orgId && summariesQuery.isPending);
 
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [hasProvisioning, selectedOrganizationId]);
+  const loadError =
+    orgsQuery.error instanceof Error
+      ? orgsQuery.error.message
+      : summariesQuery.error instanceof Error
+        ? summariesQuery.error.message
+        : null;
+
+  const healthStatus: "error" | "loading" | "ok" | null = React.useMemo(() => {
+    if (orgsQuery.isPending && !orgsQuery.data) return "loading";
+    if (healthQuery.isPending) return "loading";
+    return healthQuery.data ? "ok" : "error";
+  }, [
+    orgsQuery.isPending,
+    orgsQuery.data,
+    healthQuery.isPending,
+    healthQuery.data,
+  ]);
+
+  const createProjectMut = useMutation({
+    mutationFn: createProjectRequest,
+    onSuccess: () => {
+      if (orgId) {
+        void queryClient.invalidateQueries({
+          queryKey: dashboardKeys.projectSummaries(orgId),
+        });
+      }
+    },
+  });
 
   function handleSelectOrganization(organizationId: string) {
     const organization = organizations.find((org) => org.id === organizationId);
@@ -169,7 +146,6 @@ function ProjectsRoutePage() {
       throw new Error("Select an organization before creating a project.");
     }
 
-    const client = getDashboardApiClient();
     const fallbackSlug =
       input.name
         .trim()
@@ -177,7 +153,7 @@ function ProjectsRoutePage() {
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-+|-+$/g, "")
         .slice(0, 63) || "project";
-    const project = await client.createProject({
+    const project = await createProjectMut.mutateAsync({
       name: input.name,
       organizationId: selectedOrganizationId,
       slug: fallbackSlug.length >= 2 ? fallbackSlug : `${fallbackSlug}-project`,
@@ -191,6 +167,7 @@ function ProjectsRoutePage() {
 
   async function handleSignOut() {
     await authClient.signOut();
+    queryClient.clear();
     await router.invalidate();
     await navigate({ to: "/login" });
   }

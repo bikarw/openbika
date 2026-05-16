@@ -1,11 +1,15 @@
 import type { ControlPlaneActivityLogEntry } from "@openbika/contracts";
 import { createFileRoute } from "@tanstack/react-router";
-import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { ControlPlaneLogPanel } from "#/components/control-plane-log-panel";
 import { WorkloadRuntimeLogPanel } from "#/components/workload-runtime-log-panel";
 import { readControlPlaneActivityLog } from "#/lib/control-plane-log";
-import { getDashboardApiClient } from "#/lib/openbika-client";
+import {
+  dashboardKeys,
+  fetchWorkload,
+  fetchWorkloadRuntimeLogs,
+} from "#/lib/dashboard-api-queries";
 
 export const Route = createFileRoute(
   "/_protected/$organizationSlug/projects/$projectSlug/workloads/$workloadId/logs",
@@ -15,71 +19,45 @@ export const Route = createFileRoute(
 
 function WorkloadLogsTabRoute() {
   const { workloadId } = Route.useParams();
-  const [entries, setEntries] = React.useState<ControlPlaneActivityLogEntry[]>(
-    [],
-  );
-  const [pending, setPending] = React.useState(true);
-  const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
 
-  const [workloadKind, setWorkloadKind] = React.useState<
-    "container" | "function" | null
-  >(null);
-  const [runtimeText, setRuntimeText] = React.useState("");
-  const [runtimePending, setRuntimePending] = React.useState(true);
-  const [runtimeError, setRuntimeError] = React.useState<string | null>(null);
+  const tickQuery = useQuery({
+    queryKey: [...dashboardKeys.root, "workload-logs-tab", workloadId],
+    queryFn: async () => {
+      const workload = await fetchWorkload(workloadId);
+      const entries = readControlPlaneActivityLog(workload.observedState);
+      let runtimeText = "";
+      let runtimeError: string | null = null;
+      if (workload.kind === "container" || workload.kind === "function") {
+        try {
+          const logs = await fetchWorkloadRuntimeLogs(workloadId, 750);
+          runtimeText = logs.logs;
+        } catch (err) {
+          runtimeError =
+            err instanceof Error ? err.message : "Failed to load runtime logs";
+        }
+      }
+      return {
+        entries,
+        runtimeError,
+        runtimeText,
+        workloadKind: workload.kind,
+      };
+    },
+    refetchInterval: 2_000,
+  });
 
+  const data = tickQuery.data;
+  const errorMessage =
+    tickQuery.error instanceof Error
+      ? tickQuery.error.message
+      : tickQuery.isError
+        ? "Failed to load logs"
+        : null;
+
+  const entries: ControlPlaneActivityLogEntry[] = data?.entries ?? [];
+  const workloadKind = data?.workloadKind ?? null;
   const showRuntimePanel =
     workloadKind === "container" || workloadKind === "function";
-
-  React.useEffect(() => {
-    let cancelled = false;
-    const client = getDashboardApiClient();
-
-    async function tick() {
-      try {
-        const workload = await client.getWorkload(workloadId);
-        if (cancelled) return;
-        setEntries(readControlPlaneActivityLog(workload.observedState));
-        setWorkloadKind(workload.kind);
-        setErrorMessage(null);
-
-        if (workload.kind === "container" || workload.kind === "function") {
-          try {
-            const logs = await client.getWorkloadRuntimeLogs(workloadId, {
-              tail: 750,
-            });
-            if (cancelled) return;
-            setRuntimeText(logs.logs);
-            setRuntimeError(null);
-          } catch (err) {
-            if (cancelled) return;
-            setRuntimeError(
-              err instanceof Error ? err.message : "Failed to load runtime logs",
-            );
-          } finally {
-            if (!cancelled) setRuntimePending(false);
-          }
-        } else {
-          setRuntimePending(false);
-        }
-      } catch (err) {
-        if (cancelled) return;
-        setErrorMessage(
-          err instanceof Error ? err.message : "Failed to load logs",
-        );
-      } finally {
-        if (!cancelled) setPending(false);
-      }
-    }
-
-    void tick();
-    const intervalId = window.setInterval(() => void tick(), 2_000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [workloadId]);
 
   const runtimeDescription =
     workloadKind === "function"
@@ -96,14 +74,14 @@ function WorkloadLogsTabRoute() {
       <ControlPlaneLogPanel
         description="Provisioning and control-plane steps from the Temporal worker. This is separate from your app’s process output in Runtime below."
         entries={entries}
-        pending={pending}
+        pending={tickQuery.isPending}
         title="Provisioning"
       />
       <WorkloadRuntimeLogPanel
         description={runtimeDescription}
-        errorMessage={runtimeError}
-        pending={runtimePending && showRuntimePanel}
-        text={runtimeText}
+        errorMessage={data?.runtimeError ?? null}
+        pending={tickQuery.isPending && showRuntimePanel}
+        text={data?.runtimeText ?? ""}
         title="Runtime (process)"
         visible={showRuntimePanel}
       />

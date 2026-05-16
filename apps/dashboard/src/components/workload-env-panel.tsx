@@ -1,3 +1,4 @@
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@openbika/ui/components/button";
 import {
   Card,
@@ -13,11 +14,14 @@ import * as React from "react";
 
 import { useProjectWorkspaceOutlet } from "#/components/project-workspace";
 import {
+  dashboardKeys,
+  patchWorkloadEnvRequest,
+} from "#/lib/dashboard-api-queries";
+import {
   envFromWorkloadDesiredState,
   parseEnvText,
   serializeEnvText,
 } from "#/lib/env-text";
-import { getDashboardApiClient } from "#/lib/openbika-client";
 
 const REDACTED = "••••";
 
@@ -28,14 +32,25 @@ interface WorkloadEnvPanelProps {
 export function WorkloadEnvironmentPanel({
   workloadId,
 }: WorkloadEnvPanelProps) {
+  const queryClient = useQueryClient();
   const { workloads, refreshWorkloads } = useProjectWorkspaceOutlet();
   const workload = workloads.find((w) => w.id === workloadId) ?? null;
 
   const [editing, setEditing] = React.useState(false);
   const [editText, setEditText] = React.useState("");
   const [revealed, setRevealed] = React.useState(false);
-  const [saving, setSaving] = React.useState(false);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+
+  const patchMut = useMutation({
+    mutationFn: (env: Record<string, string>) =>
+      patchWorkloadEnvRequest(workloadId, { env }),
+    onSuccess: (updated) => {
+      void queryClient.invalidateQueries({
+        queryKey: dashboardKeys.workloads(updated.projectId),
+      });
+      void refreshWorkloads();
+    },
+  });
 
   const desiredEnv = workload
     ? envFromWorkloadDesiredState(workload.desiredState)
@@ -60,20 +75,15 @@ export function WorkloadEnvironmentPanel({
       return;
     }
 
-    setSaving(true);
     setErrorMessage(null);
 
     try {
-      const client = getDashboardApiClient();
-      await client.patchWorkloadEnv(workloadId, { env });
-      await refreshWorkloads();
+      await patchMut.mutateAsync(env);
       setEditing(false);
     } catch (err) {
       setErrorMessage(
         err instanceof Error ? err.message : "Failed to save environment",
       );
-    } finally {
-      setSaving(false);
     }
   }
 
@@ -81,11 +91,13 @@ export function WorkloadEnvironmentPanel({
     setEditing(true);
     setEditText(serializeEnvText(desiredEnv));
     setErrorMessage(null);
+    patchMut.reset();
   }
 
   function cancelEdit() {
     setEditing(false);
     setErrorMessage(null);
+    patchMut.reset();
   }
 
   if (!workload) {
@@ -100,6 +112,7 @@ export function WorkloadEnvironmentPanel({
   }
 
   const sortedKeys = Object.keys(desiredEnv).sort((a, b) => a.localeCompare(b));
+  const saving = patchMut.isPending;
 
   return (
     <Card>
@@ -182,7 +195,11 @@ export function WorkloadEnvironmentPanel({
           >
             Cancel
           </Button>
-          <Button disabled={saving} onClick={() => void handleSave()} type="button">
+          <Button
+            disabled={saving}
+            onClick={() => void handleSave()}
+            type="button"
+          >
             {saving ? "Saving…" : "Save and redeploy"}
           </Button>
         </CardFooter>

@@ -24,9 +24,11 @@ import { Input } from "@openbika/ui/components/input";
 import { Copy, Dices, ExternalLink, Plus, Trash2, X } from "lucide-react";
 import * as React from "react";
 
+import { useMutation } from "@tanstack/react-query";
+
 import { useProjectWorkspaceOutlet } from "#/components/project-workspace";
 import { workloadObservedPublicBaseUrl } from "#/components/workloads-panel";
-import { getDashboardApiClient } from "#/lib/openbika-client";
+import { patchWorkloadDomainsRequest } from "#/lib/dashboard-api-queries";
 
 interface WorkloadDomainsPanelProps {
   workloadId: string;
@@ -121,6 +123,22 @@ export function WorkloadDomainsPanel({ workloadId }: WorkloadDomainsPanelProps) 
   const { workloads, refreshWorkloads } = useProjectWorkspaceOutlet();
   const workload = workloads.find((w) => w.id === workloadId) ?? null;
 
+  const patchDomainsMut = useMutation({
+    mutationFn: (vars: {
+      domains: WorkloadIngressDomain[];
+      omitPlatformHostname?: boolean;
+    }) =>
+      patchWorkloadDomainsRequest(workloadId, {
+        domains: vars.domains,
+        ...(vars.omitPlatformHostname === true
+          ? { omitPlatformHostname: true }
+          : {}),
+      }),
+    onSuccess: () => {
+      void refreshWorkloads();
+    },
+  });
+
   const [copiedIdx, setCopiedIdx] = React.useState<string | null>(null);
   const [addOpen, setAddOpen] = React.useState(false);
   const [draftHost, setDraftHost] = React.useState("");
@@ -128,7 +146,6 @@ export function WorkloadDomainsPanel({ workloadId }: WorkloadDomainsPanelProps) 
   const [draftPort, setDraftPort] = React.useState("");
   const [draftHttps, setDraftHttps] = React.useState(true);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
-  const [saving, setSaving] = React.useState(false);
 
   const kind = workload ? workloadKindPort(workload.kind) : "container";
 
@@ -277,7 +294,7 @@ export function WorkloadDomainsPanel({ workloadId }: WorkloadDomainsPanelProps) 
     return out;
   }, [declaredPorts, desiredDomains, observedRoutes, workload]);
 
-  const busy = saving || workload?.status === "provisioning";
+  const busy = patchDomainsMut.isPending || workload?.status === "provisioning";
 
   const atDomainLimit =
     desiredDomains.length >= MAX_WORKLOAD_INGRESS_DOMAINS;
@@ -309,17 +326,12 @@ export function WorkloadDomainsPanel({ workloadId }: WorkloadDomainsPanelProps) 
     if (!workload) {
       return;
     }
-    setSaving(true);
     setErrorMessage(null);
     try {
-      const client = getDashboardApiClient();
-      await client.patchWorkloadDomains(workloadId, {
+      await patchDomainsMut.mutateAsync({
         domains: next,
-        ...(options?.omitPlatformHostname === true
-          ? { omitPlatformHostname: true }
-          : {}),
+        omitPlatformHostname: options?.omitPlatformHostname,
       });
-      await refreshWorkloads();
       setDraftHost("");
       setDraftPath("/");
       setDraftHttps(true);
@@ -328,8 +340,6 @@ export function WorkloadDomainsPanel({ workloadId }: WorkloadDomainsPanelProps) 
       setErrorMessage(
         err instanceof Error ? err.message : "Unable to save ingress domains.",
       );
-    } finally {
-      setSaving(false);
     }
   }
 
@@ -707,7 +717,7 @@ export function WorkloadDomainsPanel({ workloadId }: WorkloadDomainsPanelProps) 
                   }
                   type="submit"
                 >
-                  {saving ? "Saving…" : "Add domain"}
+                  {patchDomainsMut.isPending ? "Saving…" : "Add domain"}
                 </Button>
               </div>
             </form>

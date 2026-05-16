@@ -1,5 +1,6 @@
 import { createRouter as createTanStackRouter } from '@tanstack/react-router'
 import { emptyAuth } from '#/auth-session'
+import { dashboardQueryClient } from '#/lib/dashboard-query-client'
 
 import { routeTree } from './routeTree.gen'
 
@@ -8,9 +9,11 @@ export function getRouter() {
     routeTree,
     context: {
       auth: emptyAuth(),
+      queryClient: dashboardQueryClient,
     },
     scrollRestoration: true,
     defaultPreload: 'intent',
+    defaultPreloadDelay: 100,
     defaultPreloadStaleTime: 0,
   })
 

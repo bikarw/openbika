@@ -13,7 +13,7 @@ function DatabaseEnvRedirectRoute() {
     <Navigate
       params={{ databaseId, organizationSlug, projectSlug }}
       replace
-      to="/$organizationSlug/projects/$projectSlug/databases/$databaseId/"
+      to="/$organizationSlug/projects/$projectSlug/databases/$databaseId"
     />
   );
 }

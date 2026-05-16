@@ -21,9 +21,15 @@ import {
 import * as React from "react";
 import { basicSetup } from "codemirror";
 
+import { useMutation, useQuery } from "@tanstack/react-query";
+
 import { SchemaStatusSkeleton } from "#/components/loading-placeholders";
 import { QueryResultTable } from "#/components/query-result-table";
-import { getDashboardApiClient } from "#/lib/openbika-client";
+import {
+  dashboardKeys,
+  executeBranchSql,
+  fetchBranchSchema,
+} from "#/lib/dashboard-api-queries";
 
 const defaultQuery = "select 1;";
 
@@ -91,43 +97,27 @@ export function SqlEditor({
   const editorViewRef = React.useRef<EditorView | null>(null);
   const runQueryRef = React.useRef<() => void>(() => undefined);
   const queryRef = React.useRef(defaultQuery);
-  const [schema, setSchema] = React.useState<BranchSchemaResponse | null>(null);
-  const [schemaError, setSchemaError] = React.useState<string | null>(null);
-  const [schemaLoading, setSchemaLoading] = React.useState(true);
+  const schemaQuery = useQuery({
+    queryKey: dashboardKeys.branchSchema(branchId),
+    queryFn: () => fetchBranchSchema(branchId),
+  });
+  const schema = schemaQuery.data ?? null;
+  const schemaError =
+    schemaQuery.error instanceof Error
+      ? schemaQuery.error.message
+      : schemaQuery.isError
+        ? "Failed to load branch schema"
+        : null;
+  const schemaLoading = schemaQuery.isPending;
   const [readOnly, setReadOnly] = React.useState(true);
   const [writeModeConfirmed, setWriteModeConfirmed] = React.useState(false);
   const [result, setResult] = React.useState<BranchQueryResponse | null>(null);
   const [queryError, setQueryError] = React.useState<string | null>(null);
-  const [running, setRunning] = React.useState(false);
 
-  React.useEffect(() => {
-    let cancelled = false;
-    const client = getDashboardApiClient();
-
-    async function loadSchema() {
-      setSchemaLoading(true);
-      setSchemaError(null);
-      setSchema(null);
-
-      try {
-        const nextSchema = await client.getBranchSchema(branchId);
-        if (!cancelled) setSchema(nextSchema);
-      } catch (err) {
-        if (!cancelled) {
-          setSchemaError(
-            err instanceof Error ? err.message : "Failed to load branch schema",
-          );
-        }
-      } finally {
-        if (!cancelled) setSchemaLoading(false);
-      }
-    }
-
-    void loadSchema();
-    return () => {
-      cancelled = true;
-    };
-  }, [branchId]);
+  const runMutation = useMutation({
+    mutationFn: (args: { readOnly: boolean; sql: string }) =>
+      executeBranchSql(branchId, args),
+  });
 
   async function runQuery() {
     const sqlText =
@@ -144,21 +134,17 @@ export function SqlEditor({
       return;
     }
 
-    setRunning(true);
     setQueryError(null);
     setResult(null);
 
     try {
-      const client = getDashboardApiClient();
-      const nextResult = await client.executeBranchQuery(branchId, {
+      const nextResult = await runMutation.mutateAsync({
         readOnly,
         sql: trimmed,
       });
       setResult(nextResult);
     } catch (err) {
       setQueryError(err instanceof Error ? err.message : "Query failed");
-    } finally {
-      setRunning(false);
     }
   }
 
@@ -260,13 +246,13 @@ export function SqlEditor({
               {readOnly ? "Allow writes" : "Use read-only"}
             </Button>
             <Button
-              disabled={running}
+              disabled={runMutation.isPending}
               onClick={() => void runQuery()}
               size="sm"
               type="button"
             >
               <Play className="size-4" />
-              {running ? "Running..." : "Run"}
+              {runMutation.isPending ? "Running..." : "Run"}
             </Button>
           </div>
         </div>
@@ -342,7 +328,7 @@ export function SqlEditor({
           ) : null}
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-3">
-          {running ? (
+          {runMutation.isPending ? (
             <div className="flex h-full min-h-48 flex-col items-center justify-center gap-2 text-sm">
               <div className="size-5 animate-spin rounded-full border border-primary border-t-transparent" />
               Running query...

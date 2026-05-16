@@ -16,6 +16,7 @@ import { Route as ProtectedRouteRouteImport } from './routes/_protected/route'
 import { Route as ProtectedIndexRouteImport } from './routes/_protected/index'
 import { Route as ProtectedOrganizationSlugProjectsIndexRouteImport } from './routes/_protected/$organizationSlug/projects/index'
 import { Route as ProtectedOrganizationSlugProjectsProjectSlugRouteImport } from './routes/_protected/$organizationSlug/projects/$projectSlug'
+import { Route as ProtectedOrganizationSlugProjectsProjectSlugIndexRouteImport } from './routes/_protected/$organizationSlug/projects/$projectSlug/index'
 import { Route as ProtectedOrganizationSlugProjectsProjectSlugWorkloadsIndexRouteImport } from './routes/_protected/$organizationSlug/projects/$projectSlug/workloads/index'
 import { Route as ProtectedOrganizationSlugProjectsProjectSlugServicesIndexRouteImport } from './routes/_protected/$organizationSlug/projects/$projectSlug/services/index'
 import { Route as ProtectedOrganizationSlugProjectsProjectSlugDatabasesIndexRouteImport } from './routes/_protected/$organizationSlug/projects/$projectSlug/databases/index'
@@ -68,6 +69,12 @@ const ProtectedOrganizationSlugProjectsProjectSlugRoute =
     id: '/$organizationSlug/projects/$projectSlug',
     path: '/$organizationSlug/projects/$projectSlug',
     getParentRoute: () => ProtectedRouteRoute,
+  } as any)
+const ProtectedOrganizationSlugProjectsProjectSlugIndexRoute =
+  ProtectedOrganizationSlugProjectsProjectSlugIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => ProtectedOrganizationSlugProjectsProjectSlugRoute,
   } as any)
 const ProtectedOrganizationSlugProjectsProjectSlugWorkloadsIndexRoute =
   ProtectedOrganizationSlugProjectsProjectSlugWorkloadsIndexRouteImport.update({
@@ -206,6 +213,7 @@ export interface FileRoutesByFullPath {
   '/signup': typeof SignupRoute
   '/$organizationSlug/projects/$projectSlug': typeof ProtectedOrganizationSlugProjectsProjectSlugRouteWithChildren
   '/$organizationSlug/projects/': typeof ProtectedOrganizationSlugProjectsIndexRoute
+  '/$organizationSlug/projects/$projectSlug/': typeof ProtectedOrganizationSlugProjectsProjectSlugIndexRoute
   '/$organizationSlug/projects/$projectSlug/databases/$databaseId': typeof ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdRouteRouteWithChildren
   '/$organizationSlug/projects/$projectSlug/workloads/$workloadId': typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdRouteRouteWithChildren
   '/$organizationSlug/projects/$projectSlug/branches/': typeof ProtectedOrganizationSlugProjectsProjectSlugBranchesIndexRoute
@@ -228,8 +236,8 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
   '/': typeof ProtectedIndexRoute
-  '/$organizationSlug/projects/$projectSlug': typeof ProtectedOrganizationSlugProjectsProjectSlugRouteWithChildren
   '/$organizationSlug/projects': typeof ProtectedOrganizationSlugProjectsIndexRoute
+  '/$organizationSlug/projects/$projectSlug': typeof ProtectedOrganizationSlugProjectsProjectSlugIndexRoute
   '/$organizationSlug/projects/$projectSlug/branches': typeof ProtectedOrganizationSlugProjectsProjectSlugBranchesIndexRoute
   '/$organizationSlug/projects/$projectSlug/databases': typeof ProtectedOrganizationSlugProjectsProjectSlugDatabasesIndexRoute
   '/$organizationSlug/projects/$projectSlug/services': typeof ProtectedOrganizationSlugProjectsProjectSlugServicesIndexRoute
@@ -254,6 +262,7 @@ export interface FileRoutesById {
   '/_protected/': typeof ProtectedIndexRoute
   '/_protected/$organizationSlug/projects/$projectSlug': typeof ProtectedOrganizationSlugProjectsProjectSlugRouteWithChildren
   '/_protected/$organizationSlug/projects/': typeof ProtectedOrganizationSlugProjectsIndexRoute
+  '/_protected/$organizationSlug/projects/$projectSlug/': typeof ProtectedOrganizationSlugProjectsProjectSlugIndexRoute
   '/_protected/$organizationSlug/projects/$projectSlug/databases/$databaseId': typeof ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdRouteRouteWithChildren
   '/_protected/$organizationSlug/projects/$projectSlug/workloads/$workloadId': typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdRouteRouteWithChildren
   '/_protected/$organizationSlug/projects/$projectSlug/branches/': typeof ProtectedOrganizationSlugProjectsProjectSlugBranchesIndexRoute
@@ -280,6 +289,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/$organizationSlug/projects/$projectSlug'
     | '/$organizationSlug/projects/'
+    | '/$organizationSlug/projects/$projectSlug/'
     | '/$organizationSlug/projects/$projectSlug/databases/$databaseId'
     | '/$organizationSlug/projects/$projectSlug/workloads/$workloadId'
     | '/$organizationSlug/projects/$projectSlug/branches/'
@@ -302,8 +312,8 @@ export interface FileRouteTypes {
     | '/login'
     | '/signup'
     | '/'
-    | '/$organizationSlug/projects/$projectSlug'
     | '/$organizationSlug/projects'
+    | '/$organizationSlug/projects/$projectSlug'
     | '/$organizationSlug/projects/$projectSlug/branches'
     | '/$organizationSlug/projects/$projectSlug/databases'
     | '/$organizationSlug/projects/$projectSlug/services'
@@ -327,6 +337,7 @@ export interface FileRouteTypes {
     | '/_protected/'
     | '/_protected/$organizationSlug/projects/$projectSlug'
     | '/_protected/$organizationSlug/projects/'
+    | '/_protected/$organizationSlug/projects/$projectSlug/'
     | '/_protected/$organizationSlug/projects/$projectSlug/databases/$databaseId'
     | '/_protected/$organizationSlug/projects/$projectSlug/workloads/$workloadId'
     | '/_protected/$organizationSlug/projects/$projectSlug/branches/'
@@ -402,6 +413,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/$organizationSlug/projects/$projectSlug'
       preLoaderRoute: typeof ProtectedOrganizationSlugProjectsProjectSlugRouteImport
       parentRoute: typeof ProtectedRouteRoute
+    }
+    '/_protected/$organizationSlug/projects/$projectSlug/': {
+      id: '/_protected/$organizationSlug/projects/$projectSlug/'
+      path: '/'
+      fullPath: '/$organizationSlug/projects/$projectSlug/'
+      preLoaderRoute: typeof ProtectedOrganizationSlugProjectsProjectSlugIndexRouteImport
+      parentRoute: typeof ProtectedOrganizationSlugProjectsProjectSlugRoute
     }
     '/_protected/$organizationSlug/projects/$projectSlug/workloads/': {
       id: '/_protected/$organizationSlug/projects/$projectSlug/workloads/'
@@ -570,6 +588,7 @@ const ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdRouteRouteW
   )
 
 interface ProtectedOrganizationSlugProjectsProjectSlugRouteChildren {
+  ProtectedOrganizationSlugProjectsProjectSlugIndexRoute: typeof ProtectedOrganizationSlugProjectsProjectSlugIndexRoute
   ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdRouteRoute: typeof ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdRouteRouteWithChildren
   ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdRouteRoute: typeof ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdRouteRouteWithChildren
   ProtectedOrganizationSlugProjectsProjectSlugBranchesIndexRoute: typeof ProtectedOrganizationSlugProjectsProjectSlugBranchesIndexRoute
@@ -581,6 +600,8 @@ interface ProtectedOrganizationSlugProjectsProjectSlugRouteChildren {
 
 const ProtectedOrganizationSlugProjectsProjectSlugRouteChildren: ProtectedOrganizationSlugProjectsProjectSlugRouteChildren =
   {
+    ProtectedOrganizationSlugProjectsProjectSlugIndexRoute:
+      ProtectedOrganizationSlugProjectsProjectSlugIndexRoute,
     ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdRouteRoute:
       ProtectedOrganizationSlugProjectsProjectSlugDatabasesDatabaseIdRouteRouteWithChildren,
     ProtectedOrganizationSlugProjectsProjectSlugWorkloadsWorkloadIdRouteRoute:

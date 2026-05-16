@@ -1,7 +1,5 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 
-import { ProjectWorkspace } from "#/components/project-workspace";
-
 export const Route = createFileRoute(
   "/_protected/$organizationSlug/projects/$projectSlug/branches/",
 )({
@@ -21,20 +19,8 @@ export const Route = createFileRoute(
         projectSlug: params.projectSlug,
       },
       search: {},
-      to: "/$organizationSlug/projects/$projectSlug/databases/$databaseId/",
+      to: "/$organizationSlug/projects/$projectSlug/databases/$databaseId",
     });
   },
-  component: ProjectBranchesRoutePage,
+  component: () => null,
 });
-
-function ProjectBranchesRoutePage() {
-  const { organizationSlug, projectSlug } = Route.useParams();
-
-  return (
-    <ProjectWorkspace
-      organizationSlug={organizationSlug}
-      projectSlug={projectSlug}
-      view="branches"
-    />
-  );
-}

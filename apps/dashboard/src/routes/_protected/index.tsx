@@ -2,10 +2,14 @@ import {
   createFileRoute,
   useNavigate,
 } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
 import type { OrganizationResponse } from '@openbika/contracts'
 import * as React from 'react'
 
-import { getDashboardApiClient } from '#/lib/openbika-client'
+import {
+  dashboardKeys,
+  fetchOrganizations,
+} from '#/lib/dashboard-api-queries'
 import { readStoredOrganizationId } from '#/lib/selected-organization'
 
 export const Route = createFileRoute('/_protected/')({
@@ -26,44 +30,32 @@ function pickOrganization(
 
 function OrganizationRedirectPage() {
   const navigate = useNavigate({ from: '/' })
-  const [loadError, setLoadError] = React.useState<string | null>(null)
+
+  const orgsQuery = useQuery({
+    queryKey: dashboardKeys.organizations(),
+    queryFn: fetchOrganizations,
+  })
 
   React.useEffect(() => {
-    let cancelled = false
-    const client = getDashboardApiClient()
+    if (!orgsQuery.data || orgsQuery.isPending) return
+    const organization = pickOrganization(orgsQuery.data)
+    if (!organization) return
+    void navigate({
+      to: '/$organizationSlug/projects',
+      params: { organizationSlug: organization.slug },
+      replace: true,
+    })
+  }, [orgsQuery.data, orgsQuery.isPending, navigate])
 
-    async function redirectToOrganization() {
-      setLoadError(null)
-      try {
-        const orgs = await client.listOrganizations()
-        if (cancelled) return
-        const organization = pickOrganization(orgs)
-        if (!organization) {
-          setLoadError('No organizations available.')
-          return
-        }
-        await navigate({
-          to: '/$organizationSlug/projects',
-          params: { organizationSlug: organization.slug },
-          replace: true,
-        })
-      } catch (err) {
-        if (cancelled) return
-        setLoadError(
-          err instanceof Error ? err.message : 'Failed to open organization',
-        )
-      }
-    }
-
-    void redirectToOrganization()
-    return () => {
-      cancelled = true
-    }
-  }, [navigate])
+  const loadError = orgsQuery.error instanceof Error
+    ? orgsQuery.error.message
+    : orgsQuery.data?.length === 0
+      ? 'No organizations available.'
+      : null
 
   return (
     <div className="flex min-h-dvh items-center justify-center p-6 text-muted-foreground text-sm">
-      {loadError ?? 'Opening organization…'}
+      {loadError ?? (orgsQuery.isPending ? 'Opening organization…' : null)}
     </div>
   )
 }

@@ -23,12 +23,17 @@ import {
   X,
 } from "lucide-react";
 import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import {
   TablePreviewSkeleton,
   TablesSidebarSkeleton,
 } from "#/components/loading-placeholders";
-import { getDashboardApiClient } from "#/lib/openbika-client";
+import {
+  dashboardKeys,
+  executeBranchSql,
+  fetchBranchSchema,
+} from "#/lib/dashboard-api-queries";
 
 interface TablesStudioProps {
   branchId: string;
@@ -246,11 +251,21 @@ export function TablesStudio({
   branchName,
   databaseName,
 }: TablesStudioProps) {
-  const [schema, setSchema] = React.useState<BranchSchemaResponse | null>(null);
+  const schemaQuery = useQuery({
+    queryKey: dashboardKeys.branchSchema(branchId),
+    queryFn: () => fetchBranchSchema(branchId),
+  });
+  const schema = schemaQuery.data ?? null;
+  const schemaLoading = schemaQuery.isPending;
+  const schemaError =
+    schemaQuery.error instanceof Error
+      ? schemaQuery.error.message
+      : schemaQuery.isError
+        ? "Failed to load branch schema"
+        : null;
+
   const [selectedTableKey, setSelectedTableKey] = React.useState("");
   const [search, setSearch] = React.useState("");
-  const [schemaLoading, setSchemaLoading] = React.useState(true);
-  const [schemaError, setSchemaError] = React.useState<string | null>(null);
   const [preview, setPreview] = React.useState<BranchQueryResponse | null>(
     null,
   );
@@ -300,46 +315,19 @@ export function TablesStudio({
     );
 
   React.useEffect(() => {
-    let cancelled = false;
-    const client = getDashboardApiClient();
-
-    async function loadSchema() {
-      setSchemaLoading(true);
-      setSchemaError(null);
-      setSchema(null);
-      setPreview(null);
-      setDrafts([]);
-      setSelectedRowKeys(new Set());
-      setTableFilter({ column: "", value: "" });
-
-      try {
-        const nextSchema = await client.getBranchSchema(branchId);
-        if (cancelled) return;
-
-        setSchema(nextSchema);
-        setTableFilter({
-          column: nextSchema.tables[0]?.columns[0]?.name ?? "",
-          value: "",
-        });
-        setSelectedTableKey(
-          nextSchema.tables[0] ? tableKey(nextSchema.tables[0]) : "",
-        );
-      } catch (err) {
-        if (!cancelled) {
-          setSchemaError(
-            err instanceof Error ? err.message : "Failed to load branch schema",
-          );
-        }
-      } finally {
-        if (!cancelled) setSchemaLoading(false);
-      }
-    }
-
-    void loadSchema();
-    return () => {
-      cancelled = true;
-    };
-  }, [branchId]);
+    const nextSchema = schemaQuery.data;
+    if (!nextSchema) return;
+    setPreview(null);
+    setDrafts([]);
+    setSelectedRowKeys(new Set());
+    setTableFilter({
+      column: nextSchema.tables[0]?.columns[0]?.name ?? "",
+      value: "",
+    });
+    setSelectedTableKey(
+      nextSchema.tables[0] ? tableKey(nextSchema.tables[0]) : "",
+    );
+  }, [schemaQuery.data]);
 
   async function loadPreview(
     table: BranchSchemaTableResponse,
@@ -353,8 +341,7 @@ export function TablesStudio({
     setSelectedRowKeys(new Set());
 
     try {
-      const client = getDashboardApiClient();
-      const result = await client.executeBranchQuery(branchId, {
+      const result = await executeBranchSql(branchId, {
         readOnly: true,
         sql: previewSql(table, filter),
       });
@@ -460,8 +447,7 @@ export function TablesStudio({
     setDraftError(null);
 
     try {
-      const client = getDashboardApiClient();
-      await client.executeBranchQuery(branchId, {
+      await executeBranchSql(branchId, {
         readOnly: false,
         sql: buildDeleteSql({
           primaryKeyColumns,
@@ -524,8 +510,7 @@ export function TablesStudio({
           });
         })
         .join("\n");
-      const client = getDashboardApiClient();
-      await client.executeBranchQuery(branchId, {
+      await executeBranchSql(branchId, {
         readOnly: false,
         sql,
       });
@@ -983,8 +968,7 @@ function AddRecordModal({
     setErrorMessage(null);
 
     try {
-      const client = getDashboardApiClient();
-      await client.executeBranchQuery(branchId, {
+      await executeBranchSql(branchId, {
         readOnly: false,
         sql: buildInsertSql({ table, values }),
       });

@@ -2,6 +2,7 @@ import type {
   OrganizationResponse,
   ProjectSummaryResponse,
 } from "@openbika/contracts";
+import { Link } from "@tanstack/react-router";
 import { Button } from "@openbika/ui/components/button";
 import {
   Card,
@@ -114,86 +115,99 @@ function ProjectCard({
   organizationSlug: string | null;
   project: ProjectSummaryResponse;
 }) {
-  const projectHref = organizationSlug
-    ? `/${organizationSlug}/projects/${project.slug}`
-    : "#";
   const serviceCount = project.databaseCount + project.workloadCount;
+  const card = (
+    <Card className="h-full transition-colors group-hover:border-foreground/30">
+      <CardHeader>
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-muted">
+            <Boxes className="text-muted-foreground size-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <CardTitle className="truncate text-base">{project.name}</CardTitle>
+              <ProjectStatusDot
+                hasFailure={project.hasFailure}
+                isProvisioning={project.isProvisioning}
+              />
+            </div>
+            <p className="text-muted-foreground inline-flex items-center gap-1.5 truncate text-xs">
+              <Hash className="size-3" />
+              <span className="truncate font-mono">{project.slug}</span>
+            </p>
+          </div>
+        </div>
+      </CardHeader>
+      <CardFooter className="min-w-0 flex-nowrap items-center justify-start gap-2 overflow-hidden">
+        <Chip
+          className="min-w-0 flex-1"
+          icon={<Boxes className="size-3.5" />}
+          label={`${serviceCount} ${serviceCount === 1 ? "service" : "services"}`}
+        />
+        <Chip
+          className="shrink-0"
+          icon={<Database className="size-3.5" />}
+          label={project.databaseCount.toString()}
+          tooltip="Databases"
+        />
+        <Chip
+          className="shrink-0"
+          icon={<Workflow className="size-3.5" />}
+          label={project.workloadCount.toString()}
+          tooltip="Workloads"
+        />
+        <Chip
+          className="shrink-0"
+          icon={<GitBranch className="size-3.5" />}
+          label={project.branchCount.toString()}
+          tooltip="Branches"
+        />
+        <span className="text-muted-foreground group-hover:text-foreground ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors">
+          Open
+          <ArrowUpRight className="size-3.5" />
+        </span>
+      </CardFooter>
+    </Card>
+  );
+
+  if (!organizationSlug) {
+    return <div className="group block h-full">{card}</div>;
+  }
 
   return (
-    <a
+    <Link
       aria-label={`Open ${project.name}`}
       className="group block h-full"
-      href={projectHref}
+      params={{ organizationSlug, projectSlug: project.slug }}
+      preload="intent"
+      to="/$organizationSlug/projects/$projectSlug"
     >
-      <Card className="h-full transition-colors group-hover:border-foreground/30">
-        <CardHeader>
-          <div className="flex min-w-0 items-start gap-3">
-            <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-muted">
-              <Boxes className="text-muted-foreground size-5" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 items-center gap-2">
-                <CardTitle className="truncate text-base">
-                  {project.name}
-                </CardTitle>
-                <ProjectStatusDot
-                  hasFailure={project.hasFailure}
-                  isProvisioning={project.isProvisioning}
-                />
-              </div>
-              <p className="text-muted-foreground inline-flex items-center gap-1.5 truncate text-xs">
-                <Hash className="size-3" />
-                <span className="truncate font-mono">{project.slug}</span>
-              </p>
-            </div>
-          </div>
-        </CardHeader>
-        <CardFooter className="flex-wrap justify-start gap-2">
-          <Chip
-            icon={<Boxes className="size-3.5" />}
-            label={`${serviceCount} ${serviceCount === 1 ? "service" : "services"}`}
-          />
-          <Chip
-            icon={<Database className="size-3.5" />}
-            label={project.databaseCount.toString()}
-            tooltip="Databases"
-          />
-          <Chip
-            icon={<Workflow className="size-3.5" />}
-            label={project.workloadCount.toString()}
-            tooltip="Workloads"
-          />
-          <Chip
-            icon={<GitBranch className="size-3.5" />}
-            label={project.branchCount.toString()}
-            tooltip="Branches"
-          />
-          <span className="text-muted-foreground group-hover:text-foreground ml-auto inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors">
-            Open
-            <ArrowUpRight className="size-3.5" />
-          </span>
-        </CardFooter>
-      </Card>
-    </a>
+      {card}
+    </Link>
   );
 }
 
 function Chip({
+  className,
   icon,
   label,
   tooltip,
 }: {
+  className?: string;
   icon: React.ReactNode;
   label: string;
   tooltip?: string;
 }) {
   return (
     <span
-      className="text-muted-foreground inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs"
+      className={cn(
+        "text-muted-foreground inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs",
+        className,
+      )}
       title={tooltip}
     >
-      {icon}
-      {label}
+      <span className="shrink-0">{icon}</span>
+      <span className="truncate">{label}</span>
     </span>
   );
 }

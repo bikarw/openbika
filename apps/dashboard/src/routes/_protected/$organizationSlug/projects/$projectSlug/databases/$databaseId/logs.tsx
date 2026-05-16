@@ -1,10 +1,13 @@
 import type { ControlPlaneActivityLogEntry } from "@openbika/contracts";
 import { createFileRoute } from "@tanstack/react-router";
-import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { ControlPlaneLogPanel } from "#/components/control-plane-log-panel";
 import { readControlPlaneActivityLog } from "#/lib/control-plane-log";
-import { getDashboardApiClient } from "#/lib/openbika-client";
+import {
+  dashboardKeys,
+  fetchDatabase,
+} from "#/lib/dashboard-api-queries";
 
 export const Route = createFileRoute(
   "/_protected/$organizationSlug/projects/$projectSlug/databases/$databaseId/logs",
@@ -14,40 +17,23 @@ export const Route = createFileRoute(
 
 function DatabaseLogsTabRoute() {
   const { databaseId } = Route.useParams();
-  const [entries, setEntries] = React.useState<ControlPlaneActivityLogEntry[]>(
-    [],
-  );
-  const [pending, setPending] = React.useState(true);
-  const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
 
-  React.useEffect(() => {
-    let cancelled = false;
-    const client = getDashboardApiClient();
+  const dbLogsQuery = useQuery({
+    queryKey: [...dashboardKeys.root, "database-logs-tab", databaseId],
+    queryFn: async () => {
+      const database = await fetchDatabase(databaseId);
+      return readControlPlaneActivityLog(database.observedState);
+    },
+    refetchInterval: 1_500,
+  });
 
-    async function tick() {
-      try {
-        const database = await client.getDatabase(databaseId);
-        if (cancelled) return;
-        setEntries(readControlPlaneActivityLog(database.observedState));
-        setErrorMessage(null);
-      } catch (err) {
-        if (cancelled) return;
-        setErrorMessage(
-          err instanceof Error ? err.message : "Failed to load logs",
-        );
-      } finally {
-        if (!cancelled) setPending(false);
-      }
-    }
-
-    void tick();
-    const intervalId = window.setInterval(() => void tick(), 1_500);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [databaseId]);
+  const entries: ControlPlaneActivityLogEntry[] = dbLogsQuery.data ?? [];
+  const errorMessage =
+    dbLogsQuery.error instanceof Error
+      ? dbLogsQuery.error.message
+      : dbLogsQuery.isError
+        ? "Failed to load logs"
+        : null;
 
   return (
     <div className="grid gap-3">
@@ -59,7 +45,7 @@ function DatabaseLogsTabRoute() {
       <ControlPlaneLogPanel
         description="Control-plane provisioning events for this Postgres cluster."
         entries={entries}
-        pending={pending}
+        pending={dbLogsQuery.isPending}
         title="Logs"
       />
     </div>

@@ -11,7 +11,7 @@ export const Route = createFileRoute(
         projectSlug: params.projectSlug,
       },
       search: {},
-      to: "/$organizationSlug/projects/$projectSlug/databases/$databaseId/",
+      to: "/$organizationSlug/projects/$projectSlug/databases/$databaseId",
     });
   },
   component: () => null,

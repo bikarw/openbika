@@ -5,7 +5,7 @@ import { resolveDatabaseIdForBranch } from "#/lib/branch-database-route";
 export const Route = createFileRoute(
   "/_protected/$organizationSlug/projects/$projectSlug/branches/$branchId/$view",
 )({
-  beforeLoad: async ({ params }) => {
+  beforeLoad: async ({ context, params }) => {
     let view =
       typeof params.view === "string" ? params.view.toLowerCase() : "overview";
     if (!["overview", "sql", "tables"].includes(view)) {
@@ -13,6 +13,7 @@ export const Route = createFileRoute(
     }
 
     const databaseId = await resolveDatabaseIdForBranch(
+      context.queryClient,
       params.organizationSlug,
       params.projectSlug,
       params.branchId,

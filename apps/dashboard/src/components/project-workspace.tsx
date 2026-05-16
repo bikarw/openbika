@@ -4,6 +4,11 @@ import {
   useRouter,
   useRouterState,
 } from "@tanstack/react-router";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type {
   BranchCopyMode,
   BranchConnectionResponse,
@@ -85,29 +90,33 @@ import {
   workloadKindLabel,
   workloadObservedError,
 } from "#/components/workloads-panel";
-import { getDashboardApiClient } from "#/lib/openbika-client";
+import {
+  dashboardKeys,
+  createBranchRequest,
+  createDatabaseRequest,
+  createWorkloadRequest,
+  fetchBranchConnection,
+  fetchDatabases,
+  fetchHealthOk,
+  fetchOrganizations,
+  fetchProjects,
+  fetchWorkload,
+  fetchWorkloads,
+  rebuildWorkloadRequest,
+} from "#/lib/dashboard-api-queries";
+import {
+  type ProjectWorkspaceView,
+  deriveProjectWorkspaceRoute,
+} from "#/lib/derive-project-workspace-route";
 import {
   readStoredOrganizationId,
   writeStoredOrganizationId,
 } from "#/lib/selected-organization";
 
-type ProjectWorkspaceView =
-  | "branches"
-  | "dashboard"
-  | "database-detail"
-  | "databases"
-  | "services"
-  | "workloads"
-  | "workload-detail";
-
 interface ProjectWorkspaceProps {
   children?: React.ReactNode;
-  databaseDetailId?: string;
-  focusedDatabaseId?: string;
   organizationSlug: string;
   projectSlug: string;
-  view: ProjectWorkspaceView;
-  workloadDetailId?: string;
 }
 
 interface WorkspaceBranch {
@@ -266,167 +275,162 @@ function viewLabel(view: ProjectWorkspaceView) {
 
 export function ProjectWorkspace({
   children,
-  databaseDetailId,
-  focusedDatabaseId,
   organizationSlug,
   projectSlug,
-  view,
-  workloadDetailId,
 }: ProjectWorkspaceProps) {
   const router = useRouter();
   const navigate = useNavigate();
-  const [organizations, setOrganizations] = React.useState<
-    OrganizationResponse[]
-  >([]);
-  const [projects, setProjects] = React.useState<ProjectResponse[]>([]);
-  const [project, setProject] = React.useState<ProjectResponse | null>(null);
-  const [databases, setDatabases] = React.useState<DatabaseResponse[]>([]);
-  const [workloads, setWorkloads] = React.useState<WorkloadResponse[]>([]);
-  const [loadError, setLoadError] = React.useState<string | null>(null);
-  const [pending, setPending] = React.useState(true);
-  const [healthStatus, setHealthStatus] = React.useState<
-    "error" | "loading" | "ok" | null
-  >(null);
+  const queryClient = useQueryClient();
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  });
 
-  const selectedOrganizationId =
-    organizations.find((o) => o.slug === organizationSlug)?.id ?? null;
-  const branches = flattenBranches(databases);
+  const { databaseDetailId, view, workloadDetailId } =
+    deriveProjectWorkspaceRoute(pathname, organizationSlug, projectSlug);
+  const focusedDatabaseId = undefined;
 
-  const selectedBranch = databaseDetailId
-    ? (branches.filter((item) => item.database.id === databaseDetailId)[0] ??
-      null)
-    : focusedDatabaseId
-      ? (branches.filter((item) => item.database.id === focusedDatabaseId)[0] ??
-        null)
-      : null;
-  const shouldPollProvisioning = project
-    ? hasActiveProvisioning(databases, workloads)
-    : false;
+  const orgsQuery = useQuery({
+    queryKey: dashboardKeys.organizations(),
+    queryFn: fetchOrganizations,
+  });
+
+  const healthQuery = useQuery({
+    queryKey: dashboardKeys.health(),
+    queryFn: fetchHealthOk,
+  });
+
+  const organizations = orgsQuery.data ?? [];
+  const orgId =
+    orgsQuery.data?.find((o) => o.slug === organizationSlug)?.id ?? null;
 
   React.useEffect(() => {
-    let cancelled = false;
-    const client = getDashboardApiClient();
-
-    async function load() {
-      setPending(true);
-      setLoadError(null);
-      setProject(null);
-      setDatabases([]);
-      setWorkloads([]);
-      setHealthStatus("loading");
-
-      try {
-        const healthPromise = client.health().then(
-          () => true as const,
-          () => false as const,
-        );
-        const orgs = await client.listOrganizations();
-        if (cancelled) return;
-
-        const active = orgs.find((org) => org.slug === organizationSlug);
-        if (!active) {
-          const fallback = pickOrganization(orgs);
-          setOrganizations(orgs);
-
-          if (!fallback) {
-            setLoadError("No organizations available.");
-            setHealthStatus("error");
-            return;
-          }
-
-          await navigate({
-            to: "/$organizationSlug/projects",
-            params: { organizationSlug: fallback.slug },
-            replace: true,
-          });
-          return;
-        }
-
-        writeStoredOrganizationId(active.id);
-
-        const [projectList, healthy] = await Promise.all([
-          client.listProjects({ organizationId: active.id }),
-          healthPromise,
-        ]);
-        if (cancelled) return;
-
-        const activeProject =
-          projectList.find((item) => item.slug === projectSlug) ?? null;
-
-        setOrganizations(orgs);
-        setProjects(projectList);
-        setHealthStatus(healthy ? "ok" : "error");
-
-        if (!activeProject) {
-          setLoadError("Project not found.");
-          return;
-        }
-
-        const [databaseList, workloadList] = await Promise.all([
-          client.listDatabases(activeProject.id),
-          client.listWorkloads(activeProject.id),
-        ]);
-        if (cancelled) return;
-
-        setProject(activeProject);
-        setDatabases(databaseList);
-        setWorkloads(workloadList);
-      } catch (err) {
-        if (cancelled) return;
-        setLoadError(
-          err instanceof Error ? err.message : "Failed to load project",
-        );
-        setProject(null);
-        setDatabases([]);
-        setWorkloads([]);
-        setHealthStatus("error");
-      } finally {
-        if (!cancelled) setPending(false);
-      }
+    if (!orgsQuery.data || orgsQuery.isPending) return;
+    const active = orgsQuery.data.find((o) => o.slug === organizationSlug);
+    if (active) {
+      writeStoredOrganizationId(active.id);
+      return;
     }
+    const fallback = pickOrganization(orgsQuery.data);
+    if (!fallback) return;
+    void navigate({
+      to: "/$organizationSlug/projects",
+      params: { organizationSlug: fallback.slug },
+      replace: true,
+    });
+  }, [orgsQuery.data, orgsQuery.isPending, organizationSlug, navigate]);
 
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [navigate, organizationSlug, projectSlug]);
+  const projectsQuery = useQuery({
+    queryKey: dashboardKeys.projects(orgId ?? ""),
+    queryFn: () => fetchProjects(orgId!),
+    enabled: Boolean(orgId),
+  });
 
-  React.useEffect(() => {
-    if (!project || !shouldPollProvisioning) return;
+  const projects = projectsQuery.data ?? [];
+  const project =
+    projectsQuery.data?.find((p) => p.slug === projectSlug) ?? null;
+  const projectId = project?.id ?? null;
 
-    const projectId = project.id;
-    let cancelled = false;
-    const client = getDashboardApiClient();
+  const databasesQuery = useQuery({
+    queryKey: dashboardKeys.databases(projectId ?? ""),
+    queryFn: () => fetchDatabases(projectId!),
+    enabled: Boolean(projectId),
+    refetchInterval: (query) => {
+      const list = query.state.data;
+      if (!projectId || !list) return false;
+      const w = queryClient.getQueryData<WorkloadResponse[]>(
+        dashboardKeys.workloads(projectId),
+      );
+      if (!w) return false;
+      return hasActiveProvisioning(list, w) ? 2_500 : false;
+    },
+  });
 
-    async function refreshProvisioningStatus() {
-      try {
-        const [databaseList, workloadList] = await Promise.all([
-          client.listDatabases(projectId),
-          client.listWorkloads(projectId),
-        ]);
-        if (!cancelled) {
-          setDatabases(databaseList);
-          setWorkloads(workloadList);
-          setHealthStatus("ok");
-        }
-      } catch {
-        if (!cancelled) {
-          setHealthStatus("error");
-        }
-      }
+  const workloadsQuery = useQuery({
+    queryKey: dashboardKeys.workloads(projectId ?? ""),
+    queryFn: () => fetchWorkloads(projectId!),
+    enabled: Boolean(projectId),
+    refetchInterval: (query) => {
+      const list = query.state.data;
+      if (!projectId || !list) return false;
+      const d = queryClient.getQueryData<DatabaseResponse[]>(
+        dashboardKeys.databases(projectId),
+      );
+      if (!d) return false;
+      return hasActiveProvisioning(d, list) ? 2_500 : false;
+    },
+  });
+
+  const databases = databasesQuery.data ?? [];
+  const workloads = workloadsQuery.data ?? [];
+
+  const pending =
+    orgsQuery.isPending ||
+    (!!orgId && projectsQuery.isPending) ||
+    (!!projectId &&
+      (databasesQuery.isPending || workloadsQuery.isPending));
+
+  const loadError = React.useMemo(() => {
+    if (orgsQuery.error instanceof Error) return orgsQuery.error.message;
+    if (projectsQuery.error instanceof Error)
+      return projectsQuery.error.message;
+    if (databasesQuery.error instanceof Error)
+      return databasesQuery.error.message;
+    if (workloadsQuery.error instanceof Error)
+      return workloadsQuery.error.message;
+    if (
+      projectsQuery.data !== undefined &&
+      orgId &&
+      !project &&
+      !projectsQuery.isPending
+    ) {
+      return "Project not found.";
     }
+    return null;
+  }, [
+    orgsQuery.error,
+    projectsQuery.error,
+    projectsQuery.data,
+    projectsQuery.isPending,
+    orgId,
+    project,
+    databasesQuery.error,
+    workloadsQuery.error,
+  ]);
 
-    void refreshProvisioningStatus();
-    const intervalId = window.setInterval(
-      () => void refreshProvisioningStatus(),
-      2_500,
-    );
+  const healthStatus: "error" | "loading" | "ok" | null = React.useMemo(() => {
+    if (orgsQuery.isPending && !orgsQuery.data) return "loading";
+    if (healthQuery.isPending) return "loading";
+    return healthQuery.data ? "ok" : "error";
+  }, [
+    orgsQuery.isPending,
+    orgsQuery.data,
+    healthQuery.isPending,
+    healthQuery.data,
+  ]);
 
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [project, shouldPollProvisioning]);
+  const createWorkloadMut = useMutation({
+    mutationFn: (input: CreateWorkloadRequest) =>
+      createWorkloadRequest(projectId!, input),
+    onSuccess: () => {
+      if (projectId) {
+        void queryClient.invalidateQueries({
+          queryKey: dashboardKeys.workloads(projectId),
+        });
+      }
+    },
+  });
+
+  const createDatabaseMut = useMutation({
+    mutationFn: (input: CreateDatabaseRequest) =>
+      createDatabaseRequest(projectId!, input),
+    onSuccess: () => {
+      if (projectId) {
+        void queryClient.invalidateQueries({
+          queryKey: dashboardKeys.databases(projectId),
+        });
+      }
+    },
+  });
 
   function handleSelectOrganization(organizationId: string) {
     const organization = organizations.find((org) => org.id === organizationId);
@@ -447,115 +451,94 @@ export function ProjectWorkspace({
   }
 
   async function handleCreateWorkload(input: CreateWorkloadRequest) {
-    if (!project) {
+    if (!projectId) {
       throw new Error("Project is not loaded yet.");
     }
-
-    const client = getDashboardApiClient();
-    const workload = await client.createWorkload(project.id, input);
-
-    setWorkloads((current) => [...current, workload]);
+    await createWorkloadMut.mutateAsync(input);
   }
 
   async function handleCreateDatabase(input: CreateDatabaseRequest) {
-    if (!project) {
+    if (!projectId) {
       throw new Error("Project is not loaded yet.");
     }
-
-    const client = getDashboardApiClient();
-    const database = await client.createDatabase(project.id, input);
-
-    setDatabases((current) => [...current, database]);
+    await createDatabaseMut.mutateAsync(input);
   }
 
   const refreshWorkloads = React.useCallback(async (): Promise<void> => {
-    if (!project) {
+    if (!projectId) {
       return;
     }
+    await queryClient.invalidateQueries({
+      queryKey: dashboardKeys.workloads(projectId),
+    });
+  }, [projectId, queryClient]);
 
-    const client = getDashboardApiClient();
-    try {
-      const list = await client.listWorkloads(project.id);
-      setWorkloads(list);
-      setHealthStatus("ok");
-    } catch {
-      setHealthStatus("error");
-    }
-  }, [project]);
+  const shouldHydrateWorkload =
+    view === "workload-detail" &&
+    Boolean(workloadDetailId) &&
+    Boolean(projectId) &&
+    !workloads.some((w) => w.id === workloadDetailId);
 
-  const workloadHydrationAttemptRef = React.useRef<string | null>(null);
-  const [workloadDetailHydrationPending, setWorkloadDetailHydrationPending] =
-    React.useState(false);
-  const [workloadDetailHydrationError, setWorkloadDetailHydrationError] =
-    React.useState<string | null>(null);
+  const workloadHydrateQuery = useQuery({
+    queryKey: dashboardKeys.workload(workloadDetailId ?? "_"),
+    queryFn: () => fetchWorkload(workloadDetailId!),
+    enabled: Boolean(
+      shouldHydrateWorkload && workloadDetailId && !pending,
+    ),
+    retry: 1,
+  });
 
   React.useEffect(() => {
+    if (!workloadHydrateQuery.isSuccess || !workloadHydrateQuery.data) {
+      return;
+    }
+    if (!projectId) return;
+    const fetched = workloadHydrateQuery.data;
+    if (fetched.projectId !== projectId) {
+      return;
+    }
+    queryClient.setQueryData(
+      dashboardKeys.workloads(projectId),
+      (old: WorkloadResponse[] | undefined) => {
+        const o = old ?? [];
+        return o.some((w) => w.id === fetched.id) ? o : [...o, fetched];
+      },
+    );
+  }, [
+    workloadHydrateQuery.isSuccess,
+    workloadHydrateQuery.data,
+    projectId,
+    queryClient,
+  ]);
+
+  const workloadDetailHydrationError = React.useMemo(() => {
+    if (view !== "workload-detail" || !workloadDetailId) return null;
+    if (workloadHydrateQuery.isError) {
+      return workloadHydrateQuery.error instanceof Error
+        ? workloadHydrateQuery.error.message
+        : "Unable to load this workload.";
+    }
     if (
-      view !== "workload-detail" ||
-      workloadDetailId === undefined ||
-      !project
+      workloadHydrateQuery.isSuccess &&
+      workloadHydrateQuery.data &&
+      projectId &&
+      workloadHydrateQuery.data.projectId !== projectId
     ) {
-      workloadHydrationAttemptRef.current = null;
-      setWorkloadDetailHydrationPending(false);
-      setWorkloadDetailHydrationError(null);
-      return;
+      return "This workload belongs to another project. Open it from that project's workloads list.";
     }
+    return null;
+  }, [
+    view,
+    workloadDetailId,
+    workloadHydrateQuery.isError,
+    workloadHydrateQuery.isSuccess,
+    workloadHydrateQuery.data,
+    workloadHydrateQuery.error,
+    projectId,
+  ]);
 
-    if (pending) {
-      return;
-    }
-
-    const listed = workloads.some((w) => w.id === workloadDetailId);
-    if (listed) {
-      workloadHydrationAttemptRef.current = null;
-      setWorkloadDetailHydrationPending(false);
-      setWorkloadDetailHydrationError(null);
-      return;
-    }
-
-    const attemptKey = `${project.id}:${workloadDetailId}`;
-    if (workloadHydrationAttemptRef.current === attemptKey) {
-      return;
-    }
-
-    workloadHydrationAttemptRef.current = attemptKey;
-    setWorkloadDetailHydrationPending(true);
-    setWorkloadDetailHydrationError(null);
-
-    let cancelled = false;
-    const client = getDashboardApiClient();
-
-    void (async () => {
-      try {
-        const fetched = await client.getWorkload(workloadDetailId);
-        if (cancelled) return;
-
-        if (fetched.projectId !== project.id) {
-          setWorkloadDetailHydrationError(
-            "This workload belongs to another project. Open it from that project's workloads list.",
-          );
-          setWorkloadDetailHydrationPending(false);
-          return;
-        }
-
-        setWorkloads((curr) =>
-          curr.some((w) => w.id === fetched.id) ? curr : [...curr, fetched],
-        );
-        setWorkloadDetailHydrationPending(false);
-        workloadHydrationAttemptRef.current = null;
-      } catch (err) {
-        if (cancelled) return;
-        setWorkloadDetailHydrationPending(false);
-        setWorkloadDetailHydrationError(
-          err instanceof Error ? err.message : "Unable to load this workload.",
-        );
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [view, workloadDetailId, project, pending, workloads]);
+  const workloadDetailHydrationPending =
+    shouldHydrateWorkload && workloadHydrateQuery.isFetching;
 
   async function handleCreateBranch(input: {
     copyMode: BranchCopyMode;
@@ -564,20 +547,26 @@ export function ProjectWorkspace({
     name: string;
     parentBranchId?: string;
   }) {
-    const client = getDashboardApiClient();
-    const branch = await client.createBranch(input.databaseId, {
+    if (!projectId) {
+      throw new Error("Project is not loaded yet.");
+    }
+    const branch = await createBranchRequest(input.databaseId, {
       copyMode: input.copyMode,
       expirationTtl: input.expirationTtl,
       name: input.name,
       parentBranchId: input.parentBranchId,
     });
 
-    setDatabases((currentDatabases) =>
-      currentDatabases.map((database) =>
-        database.id === input.databaseId
-          ? { ...database, branches: [...database.branches, branch] }
-          : database,
-      ),
+    queryClient.setQueryData(
+      dashboardKeys.databases(projectId),
+      (old: DatabaseResponse[] | undefined) => {
+        if (!old) return old;
+        return old.map((database) =>
+          database.id === input.databaseId
+            ? { ...database, branches: [...database.branches, branch] }
+            : database,
+        );
+      },
     );
 
     await navigate({
@@ -595,9 +584,21 @@ export function ProjectWorkspace({
 
   async function handleSignOut() {
     await authClient.signOut();
+    queryClient.clear();
     await router.invalidate();
     await navigate({ to: "/login" });
   }
+
+  const selectedOrganizationId = orgId;
+  const branches = flattenBranches(databases);
+
+  const selectedBranch = databaseDetailId
+    ? (branches.filter((item) => item.database.id === databaseDetailId)[0] ??
+      null)
+    : focusedDatabaseId
+      ? (branches.filter((item) => item.database.id === focusedDatabaseId)[0] ??
+        null)
+      : null;
 
   const workspaceOutletContext: ProjectWorkspaceOutletContext = {
     branches,
@@ -634,23 +635,28 @@ export function ProjectWorkspace({
         workloadDetailId={workloadDetailId}
         workloads={workloads}
       >
-        {children ?? (
-          <ProjectWorkspaceContent
-            branches={branches}
-            databases={databases}
-            errorMessage={loadError}
-            loading={pending}
-            onCreateBranch={handleCreateBranch}
-            onCreateDatabase={handleCreateDatabase}
-            onCreateWorkload={handleCreateWorkload}
-            organizationSlug={organizationSlug}
-            project={project}
-            projectSlug={projectSlug}
-            selectedBranch={selectedBranch}
-            view={view}
-            workloads={workloads}
-            focusedDatabaseId={focusedDatabaseId}
-          />
+        {view === "database-detail" || view === "workload-detail" ? (
+          children
+        ) : (
+          <>
+            <ProjectWorkspaceContent
+              branches={branches}
+              databases={databases}
+              errorMessage={loadError}
+              loading={pending}
+              onCreateBranch={handleCreateBranch}
+              onCreateDatabase={handleCreateDatabase}
+              onCreateWorkload={handleCreateWorkload}
+              organizationSlug={organizationSlug}
+              project={project}
+              projectSlug={projectSlug}
+              selectedBranch={selectedBranch}
+              view={view}
+              workloads={workloads}
+              focusedDatabaseId={focusedDatabaseId}
+            />
+            {children}
+          </>
         )}
       </ProjectWorkspaceShell>
     </ProjectOutletContext.Provider>
@@ -1100,7 +1106,7 @@ function WorkspaceDatabaseTabs({
         active={isDatabaseOverview}
         label="Overview"
         params={linkBase}
-        to="/$organizationSlug/projects/$projectSlug/databases/$databaseId/"
+        to="/$organizationSlug/projects/$projectSlug/databases/$databaseId"
       />
       {studioParams ? (
         <InsetTabLink
@@ -1275,7 +1281,7 @@ function WorkspaceWorkloadTabs({
         active={isOverview}
         label="Overview"
         params={linkBase}
-        to="/$organizationSlug/projects/$projectSlug/workloads/$workloadId/"
+        to="/$organizationSlug/projects/$projectSlug/workloads/$workloadId"
       />
       <InsetTabLink
         active={isDomains}
@@ -1317,6 +1323,7 @@ function InsetTabLink({ active, label, params, to }: InsetTabLinkProps) {
           : "cursor-pointer border-transparent text-muted-foreground hover:text-foreground",
       )}
       params={params}
+      preload="intent"
       role="tab"
       to={to}
     >
@@ -1534,6 +1541,7 @@ function WorkspaceNavLink({
         active && "bg-sidebar-accent text-sidebar-accent-foreground",
       )}
       params={params}
+      preload="intent"
       search={search}
       to={to}
     >
@@ -1768,6 +1776,7 @@ function ServicesEmptyState({
               "gap-2",
             )}
             params={{ organizationSlug, projectSlug }}
+            preload="intent"
             to="/$organizationSlug/projects/$projectSlug/workloads"
           >
             <Workflow className="size-4 shrink-0" />
@@ -1782,6 +1791,7 @@ function ServicesEmptyState({
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             )}
             params={{ organizationSlug, projectSlug }}
+            preload="intent"
             search={{}}
             to="/$organizationSlug/projects/$projectSlug/databases"
           >
@@ -1803,6 +1813,7 @@ function ServicesEmptyState({
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             )}
             params={{ organizationSlug, projectSlug }}
+            preload="intent"
             to="/$organizationSlug/projects/$projectSlug/workloads"
           >
             <div className="flex size-10 items-center justify-center rounded-md border border-border bg-muted">
@@ -1886,6 +1897,7 @@ function ProjectOverview({
             <Link
               className="shrink-0 text-muted-foreground text-sm hover:text-foreground"
               params={{ organizationSlug, projectSlug }}
+              preload="intent"
               to="/$organizationSlug/projects/$projectSlug/services"
             >
               View all →
@@ -2082,6 +2094,7 @@ function DatabaseServiceCard({
         organizationSlug,
         projectSlug,
       }}
+      preload="intent"
       to="/$organizationSlug/projects/$projectSlug/databases/$databaseId"
     >
       <Card className="h-full transition-colors hover:bg-muted/30">
@@ -2136,6 +2149,7 @@ function WorkloadServiceCard({
         projectSlug,
         workloadId: workload.id,
       }}
+      preload="intent"
       to="/$organizationSlug/projects/$projectSlug/workloads/$workloadId"
     >
       <Card className="h-full transition-colors hover:bg-muted/30">
@@ -2273,6 +2287,7 @@ function DatabasesPanel({
                 organizationSlug,
                 projectSlug,
               }}
+              preload="intent"
               to="/$organizationSlug/projects/$projectSlug/databases/$databaseId"
             >
               <Card className="h-full transition-colors hover:bg-muted/30">
@@ -2345,6 +2360,7 @@ function ConnectButton({
   branches: WorkspaceBranch[];
   selectedBranch: WorkspaceBranch | null;
 }) {
+  const queryClient = useQueryClient();
   const [open, setOpen] = React.useState(false);
   const [modalBranchId, setModalBranchId] = React.useState(
     selectedBranch?.branch.id ?? "",
@@ -2392,10 +2408,10 @@ function ConnectButton({
     setConnectionError(null);
 
     try {
-      const client = getDashboardApiClient();
-      const nextConnection = await client.getBranchConnection(
-        modalBranch.branch.id,
-      );
+      const nextConnection = await queryClient.fetchQuery({
+        queryKey: dashboardKeys.branchConnection(modalBranch.branch.id),
+        queryFn: () => fetchBranchConnection(modalBranch.branch.id),
+      });
       setConnection(nextConnection);
       return nextConnection.connectionString;
     } catch (err) {
@@ -3256,6 +3272,7 @@ export function DatabaseResourceOverviewOutlet({
                       projectSlug,
                       view: "sql",
                     }}
+                    preload="intent"
                     to="/$organizationSlug/projects/$projectSlug/databases/$databaseId/branches/$branchId/$view"
                   >
                     <Code2 className="size-4" />
@@ -3273,6 +3290,7 @@ export function DatabaseResourceOverviewOutlet({
                       projectSlug,
                       view: "tables",
                     }}
+                    preload="intent"
                     to="/$organizationSlug/projects/$projectSlug/databases/$databaseId/branches/$branchId/$view"
                   >
                     <Table2 className="size-4" />
@@ -3311,31 +3329,33 @@ export function WorkloadResourceOverviewOutlet({
   workloadId: string;
 }) {
   const { workloads, refreshWorkloads } = useProjectWorkspaceOutlet();
+  const rebuildMut = useMutation({
+    mutationFn: () => rebuildWorkloadRequest(workloadId),
+    onSuccess: () => {
+      void refreshWorkloads();
+    },
+  });
 
   const workload = workloads.find((item) => item.id === workloadId) ?? null;
-
-  const [rebuildPending, setRebuildPending] = React.useState(false);
-  const [rebuildError, setRebuildError] = React.useState<string | null>(null);
 
   const busyProvisioning =
     workload?.status === "provisioning" || workload?.status === "requested";
 
   async function rebuild() {
     if (workload === null) return;
-    setRebuildPending(true);
-    setRebuildError(null);
     try {
-      const client = getDashboardApiClient();
-      await client.rebuildWorkload(workloadId);
-      await refreshWorkloads();
-    } catch (err) {
-      setRebuildError(
-        err instanceof Error ? err.message : "Rebuild could not be started",
-      );
-    } finally {
-      setRebuildPending(false);
+      await rebuildMut.mutateAsync();
+    } catch {
+      /* error surfaced via rebuildMut */
     }
   }
+
+  const rebuildErrorMessage =
+    rebuildMut.error instanceof Error
+      ? rebuildMut.error.message
+      : rebuildMut.isError
+        ? "Rebuild could not be started"
+        : null;
 
   if (!workload) {
     return (
@@ -3371,28 +3391,31 @@ export function WorkloadResourceOverviewOutlet({
             <div className="flex max-w-full min-w-0 flex-col items-end gap-2">
               <div className="flex flex-wrap items-center justify-end gap-3">
                 <Button
-                  aria-busy={rebuildPending}
+                  aria-busy={rebuildMut.isPending}
                   className="gap-1.5"
-                  disabled={rebuildPending || busyProvisioning}
+                  disabled={rebuildMut.isPending || busyProvisioning}
                   onClick={() => void rebuild()}
                   size="sm"
                   type="button"
                   variant="outline"
                 >
                   <RotateCcw
-                    className={cn("size-4", rebuildPending && "animate-spin")}
+                    className={cn(
+                      "size-4",
+                      rebuildMut.isPending && "animate-spin",
+                    )}
                     aria-hidden
                   />
                   Rebuild
                 </Button>
                 <StatusDot status={workload.status} />
               </div>
-              {rebuildError !== null ? (
+              {rebuildErrorMessage !== null ? (
                 <p
                   className="max-w-[min(100%,21rem)] break-words text-right text-destructive text-xs leading-snug"
                   role="alert"
                 >
-                  {rebuildError}
+                  {rebuildErrorMessage}
                 </p>
               ) : null}
             </div>
@@ -3519,6 +3542,7 @@ function ProjectBranches({
               branchId: branch.id,
               view: "overview",
             }}
+            preload="intent"
             to="/$organizationSlug/projects/$projectSlug/databases/$databaseId/branches/$branchId/$view"
           >
             {card}

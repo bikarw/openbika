@@ -254,6 +254,7 @@ function WorkloadCard({
           projectSlug: navigation.projectSlug,
           workloadId: workload.id,
         }}
+        preload="intent"
         to="/$organizationSlug/projects/$projectSlug/workloads/$workloadId"
       >
         {card}
