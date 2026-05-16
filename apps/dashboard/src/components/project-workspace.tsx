@@ -1666,12 +1666,10 @@ function ProjectWorkspaceContent({
           <ProvisioningStatusCard databases={databases} workloads={workloads} />
           {view === "dashboard" ? (
             <ProjectOverview
-              branches={branches}
               databases={databases}
               organizationSlug={organizationSlug}
               project={project}
               projectSlug={projectSlug}
-              selectedBranch={selectedBranch}
               workloads={workloads}
             />
           ) : view === "services" ? (
@@ -1860,22 +1858,18 @@ function ProvisioningStatusCard({
 }
 
 interface ProjectOverviewProps {
-  branches: WorkspaceBranch[];
   databases: DatabaseResponse[];
   organizationSlug: string;
   project: ProjectResponse;
   projectSlug: string;
-  selectedBranch: WorkspaceBranch | null;
   workloads: WorkloadResponse[];
 }
 
 function ProjectOverview({
-  branches,
   databases,
   organizationSlug,
   project,
   projectSlug,
-  selectedBranch,
   workloads,
 }: ProjectOverviewProps) {
   const branchCount = countBranches(databases);
@@ -1896,8 +1890,6 @@ function ProjectOverview({
 
   return (
     <>
-      <ConnectButton branches={branches} selectedBranch={selectedBranch} />
-
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <SummaryCard
           icon={<Boxes className="text-muted-foreground size-4" />}
