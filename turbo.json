@@ -5,7 +5,8 @@
     "build": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
-      "outputs": ["dist/**", "tsconfig.tsbuildinfo", ".next/**", "!.next/cache/**"]
+      "outputs": ["dist/**", "tsconfig.tsbuildinfo", ".next/**", "!.next/cache/**"],
+      "env": ["VITE_API_URL"]
     },
     "lint": {
       "dependsOn": ["^lint"]

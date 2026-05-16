@@ -10,6 +10,8 @@ SERVICE_USER="${OPENBIKA_SERVICE_USER:-openbika}"
 BUN_VERSION="${OPENBIKA_BUN_VERSION:-1.3.13}"
 API_PORT="${OPENBIKA_API_PORT:-8787}"
 API_PUBLIC_URL="${OPENBIKA_API_PUBLIC_URL:-}"
+DASHBOARD_PORT="${OPENBIKA_DASHBOARD_PORT:-3000}"
+DASHBOARD_PUBLIC_URL="${OPENBIKA_DASHBOARD_PUBLIC_URL:-}"
 WEB_ORIGIN="${OPENBIKA_WEB_ORIGIN:-}"
 ACME_EMAIL="${OPENBIKA_TRAEFIK_ACME_EMAIL:-admin@example.com}"
 ENABLE_EDGE="true"
@@ -22,10 +24,12 @@ Options:
   --repo-url URL        Git repository URL (default: $REPO_URL)
   --branch NAME         Git branch/tag to install (default: $BRANCH)
   --install-dir PATH    Install directory (default: $INSTALL_DIR)
-  --api-public-url URL  Public API URL (default: http://<server-ip>:$API_PORT)
-  --web-origin URL      Dashboard/browser origin allowed by CORS/auth
-                        (default: same as --api-public-url)
-  --acme-email EMAIL    Let's Encrypt email for Traefik (default: $ACME_EMAIL)
+  --api-public-url URL      Public API URL (default: http://<server-ip>:$API_PORT)
+  --dashboard-port PORT     Dashboard HTTP port (default: $DASHBOARD_PORT)
+  --dashboard-public-url URL
+                            Public dashboard URL (default: http://<server-ip>:<dashboard-port>)
+  --web-origin URL          Browser origin allowed by CORS/auth (default: dashboard URL)
+  --acme-email EMAIL        Let's Encrypt email for Traefik (default: $ACME_EMAIL)
   --no-edge             Do not start Traefik or enable workload public ingress
   -h, --help            Show this help
 
@@ -50,6 +54,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --api-public-url)
       API_PUBLIC_URL="$2"
+      shift 2
+      ;;
+    --dashboard-port)
+      DASHBOARD_PORT="$2"
+      shift 2
+      ;;
+    --dashboard-public-url)
+      DASHBOARD_PUBLIC_URL="$2"
       shift 2
       ;;
     --web-origin)
@@ -210,8 +222,11 @@ write_env_files() {
   if [[ -z "$API_PUBLIC_URL" ]]; then
     API_PUBLIC_URL="http://$detected_ip:$API_PORT"
   fi
+  if [[ -z "$DASHBOARD_PUBLIC_URL" ]]; then
+    DASHBOARD_PUBLIC_URL="http://$detected_ip:$DASHBOARD_PORT"
+  fi
   if [[ -z "$WEB_ORIGIN" ]]; then
-    WEB_ORIGIN="$API_PUBLIC_URL"
+    WEB_ORIGIN="$DASHBOARD_PUBLIC_URL"
   fi
 
   local auth_secret
@@ -234,6 +249,7 @@ API_PUBLIC_URL=$API_PUBLIC_URL
 WEB_ORIGIN=$WEB_ORIGIN
 BETTER_AUTH_URL=$API_PUBLIC_URL
 BETTER_AUTH_SECRET=$auth_secret
+VITE_API_URL=$API_PUBLIC_URL
 
 TEMPORAL_ADDRESS=localhost:7233
 TEMPORAL_NAMESPACE=default
@@ -292,7 +308,7 @@ run_migrations_and_build() {
   env_file="$(printf "%q" "$INSTALL_DIR/.env")"
   run_in_install_dir "/usr/local/bin/bun --env-file=$env_file run db:migrate"
   remove_typescript_build_metadata
-  run_in_install_dir "/usr/local/bin/bun run build"
+  run_in_install_dir "/usr/local/bin/bun --env-file=$env_file run build"
 }
 
 write_systemd_units() {
@@ -341,29 +357,70 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
+  cat >/etc/systemd/system/openbika-dashboard.service <<EOF
+[Unit]
+Description=Openbika Dashboard
+After=network-online.target docker.service openbika-api.service
+Wants=network-online.target openbika-api.service
+
+[Service]
+Type=simple
+User=$SERVICE_USER
+Group=$SERVICE_USER
+WorkingDirectory=$INSTALL_DIR/apps/dashboard
+Environment=HOME=/var/lib/$SERVICE_USER
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=NODE_ENV=production
+ExecStart=/usr/local/bin/bun run preview -- --host 0.0.0.0 --port $DASHBOARD_PORT
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
   systemctl daemon-reload
-  systemctl enable --now openbika-api.service openbika-worker.service
+  systemctl enable --now openbika-api.service openbika-worker.service openbika-dashboard.service
 }
 
 check_health() {
   log "Checking API health"
+  local _
+  local api_ready="false"
+
   for _ in $(seq 1 60); do
     if curl -fsS "http://127.0.0.1:$API_PORT/health" >/dev/null; then
+      api_ready="true"
+      break
+    fi
+    sleep 2
+  done
+
+  if [[ "$api_ready" != "true" ]]; then
+    echo "API health check did not pass. Recent logs:" >&2
+    journalctl -u openbika-api -n 80 --no-pager >&2 || true
+    exit 1
+  fi
+
+  log "Checking dashboard"
+  for _ in $(seq 1 60); do
+    if curl -fsSL --max-time 3 "http://127.0.0.1:$DASHBOARD_PORT/" >/dev/null 2>&1; then
       echo "Openbika is installed."
       echo "API: $API_PUBLIC_URL"
+      echo "Dashboard: $DASHBOARD_PUBLIC_URL"
       echo "Temporal UI: http://$(public_ipv4):8080"
       echo
       echo "Useful commands:"
-      echo "  systemctl status openbika-api openbika-worker"
-      echo "  journalctl -u openbika-api -u openbika-worker -f"
+      echo "  systemctl status openbika-api openbika-worker openbika-dashboard"
+      echo "  journalctl -u openbika-api -u openbika-worker -u openbika-dashboard -f"
       echo "  docker compose -f $INSTALL_DIR/infra/docker/docker-compose.yml ps"
       return
     fi
     sleep 2
   done
 
-  echo "API health check did not pass. Recent logs:" >&2
-  journalctl -u openbika-api -n 80 --no-pager >&2 || true
+  echo "Dashboard did not become reachable on port $DASHBOARD_PORT. Recent logs:" >&2
+  journalctl -u openbika-dashboard -n 80 --no-pager >&2 || true
   exit 1
 }
 
