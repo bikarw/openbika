@@ -65,7 +65,7 @@ function traefikWorkloadPlatformHostname(workloadId: string): string {
   const zone = normalizeIngressFreeDnsZone(rawDnsZone);
   if (rawDnsZone !== undefined && rawDnsZone !== "" && zone === null) {
     throw new Error(
-      "OPENBIKA_INGRESS_FREE_DNS_ZONE must be nip.io or sslip.io (or leave unset).",
+      "OPENBIKA_INGRESS_FREE_DNS_ZONE must be nip.io, sslip.io, or traefik.me (or leave unset).",
     );
   }
   const ip = parseIngressEmbeddedPublicIpv4(
@@ -83,7 +83,7 @@ function traefikWorkloadPlatformHostname(workloadId: string): string {
   const owned = traefikPublicBaseDomain();
   if (!owned || owned.length === 0) {
     throw new Error(
-      "Set OPENBIKA_PUBLIC_BASE_DOMAIN (your DNS zone), or OPENBIKA_INGRESS_FREE_DNS_ZONE=nip.io|sslip.io with OPENBIKA_INGRESS_PUBLIC_IPV4, when OPENBIKA_TRAEFIK_ROUTING=true.",
+      "Set OPENBIKA_PUBLIC_BASE_DOMAIN (your DNS zone), or OPENBIKA_INGRESS_FREE_DNS_ZONE=nip.io|sslip.io|traefik.me with OPENBIKA_INGRESS_PUBLIC_IPV4, when OPENBIKA_TRAEFIK_ROUTING=true.",
     );
   }
 

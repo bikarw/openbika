@@ -3,9 +3,9 @@ const IPV4_DOTTED_RE =
 
 function ingressConfiguredZone(
   raw: string | undefined,
-): "nip.io" | "sslip.io" | null {
+): "nip.io" | "sslip.io" | "traefik.me" | null {
   const z = raw?.trim().toLowerCase();
-  return z === "nip.io" || z === "sslip.io" ? z : null;
+  return z === "nip.io" || z === "sslip.io" || z === "traefik.me" ? z : null;
 }
 
 function sanitizeDottedIpv4(candidate: string): string | null {
@@ -14,7 +14,7 @@ function sanitizeDottedIpv4(candidate: string): string | null {
 }
 
 /**
- * Looks up this host's public egress IPv4 (for nip.io / sslip ingress names).
+ * Looks up this host's public egress IPv4 (for embedded-IP free DNS names).
  */
 export async function detectPublicIngressIpv4(options?: {
   timeoutMs?: number;
@@ -68,7 +68,7 @@ export async function detectPublicIngressIpv4(options?: {
 
 /**
  * Mutates env (usually `process.env`).
- * When nip/sslip is configured and IPv4 is empty or literal `auto`, discovers the egress IPv4
+ * When free DNS is configured and IPv4 is empty or literal `auto`, discovers the egress IPv4
  * once at startup so VPS installs avoid hand-editing IPs.
  */
 export async function bootstrapIngressIpv4Env(
@@ -89,7 +89,7 @@ export async function bootstrapIngressIpv4Env(
     );
     if (envObj.NODE_ENV === "production") {
       console.warn(
-        "[openbika] nip/sslip with loopback is not publicly reachable; set OPENBIKA_INGRESS_PUBLIC_IPV4=auto or your routable IPv4.",
+        "[openbika] free-DNS ingress with loopback is not publicly reachable; set OPENBIKA_INGRESS_PUBLIC_IPV4=auto or your routable IPv4.",
       );
     }
     return;
@@ -115,6 +115,6 @@ export async function bootstrapIngressIpv4Env(
   }
 
   console.warn(
-    "[openbika] Could not autodiscover public IPv4 for nip/sslip ingress — set OPENBIKA_INGRESS_PUBLIC_IPV4 to this host's routable IPv4.",
+    "[openbika] Could not autodiscover public IPv4 for free-DNS ingress — set OPENBIKA_INGRESS_PUBLIC_IPV4 to this host's routable IPv4.",
   );
 }

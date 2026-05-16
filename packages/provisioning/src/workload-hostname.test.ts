@@ -18,9 +18,9 @@ describe("workload-hostname helpers", () => {
   });
 
   it("builds fqdn hosts", () => {
-    expect(workloadPublicHostname("wkl_01HZTESTEXAMPLE", "runs.example.dev")).toBe(
-      "wkl-01hztestexample.runs.example.dev",
-    );
+    expect(
+      workloadPublicHostname("wkl_01HZTESTEXAMPLE", "runs.example.dev"),
+    ).toBe("wkl-01hztestexample.runs.example.dev");
   });
 
   it("returns https base urls", () => {
@@ -50,15 +50,15 @@ describe("workload-hostname helpers", () => {
     );
     expect(map["traefik.enable"]).toBe("true");
     expect(map["traefik.docker.network"]).toBe("openbika_edge");
-    expect(map["traefik.http.services.obl-test-web.loadbalancer.server.port"]).toBe(
-      "9100",
-    );
-    expect(map["traefik.http.services.obl-test-websecure.loadbalancer.server.port"]).toBe(
-      "9100",
-    );
-    expect(map["traefik.http.routers.obl-test-websecure.tls.certresolver"]).toBe(
-      "letsencrypt",
-    );
+    expect(
+      map["traefik.http.services.obl-test-web.loadbalancer.server.port"],
+    ).toBe("9100");
+    expect(
+      map["traefik.http.services.obl-test-websecure.loadbalancer.server.port"],
+    ).toBe("9100");
+    expect(
+      map["traefik.http.routers.obl-test-websecure.tls.certresolver"],
+    ).toBe("letsencrypt");
     expect(map["traefik.http.routers.obl-test-web.rule"]).toBe(
       "Host(`fn.example.dev`)",
     );
@@ -96,9 +96,7 @@ describe("workload-hostname helpers", () => {
     );
     const eq = raw?.indexOf("=") ?? -1;
     const rule = eq >= 0 && raw !== undefined ? raw.slice(eq + 1) : undefined;
-    expect(rule).toBe(
-      "Host(`app.example.dev`) && PathPrefix(`/api/v1`)",
-    );
+    expect(rule).toBe("Host(`app.example.dev`) && PathPrefix(`/api/v1`)");
   });
 
   it("builds nip.io hostnames embedding public IPv4", () => {
@@ -113,8 +111,22 @@ describe("workload-hostname helpers", () => {
 
   it("builds sslip.io hostnames with dashed IPv4 in one label", () => {
     expect(
-      suggestWorkloadEmbeddedIpIngressHostname("wkl_A", "198.51.100.2", "sslip.io"),
+      suggestWorkloadEmbeddedIpIngressHostname(
+        "wkl_A",
+        "198.51.100.2",
+        "sslip.io",
+      ),
     ).toBe("wkl-a-198-51-100-2.sslip.io");
+  });
+
+  it("builds traefik.me hostnames with dashed IPv4 in one label", () => {
+    expect(
+      suggestWorkloadEmbeddedIpIngressHostname(
+        "wkl_01HZTESTEXAMPLE",
+        "203.0.113.54",
+        "traefik.me",
+      ),
+    ).toBe("wkl-01hztestexample-203-0-113-54.traefik.me");
   });
 
   it("plaintext mode uses only the web entrypoint", () => {
@@ -127,8 +139,6 @@ describe("workload-hostname helpers", () => {
       routerBasename: "obl-http",
     });
     expect(labels.some((l) => l.includes("websecure"))).toBe(false);
-    expect(
-      labels.find((l) => l.includes("middlewares")),
-    ).toBeUndefined();
+    expect(labels.find((l) => l.includes("middlewares"))).toBeUndefined();
   });
 });

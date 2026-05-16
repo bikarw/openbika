@@ -291,8 +291,7 @@ async function assertServerAdmin({
     .where(eq(schema.memberships.userId, userId));
 
   const hasAdminMembership = memberships.some(
-    (membership) =>
-      membership.role === "owner" || membership.role === "admin",
+    (membership) => membership.role === "owner" || membership.role === "admin",
   );
 
   if (!hasAdminMembership) {
@@ -637,11 +636,9 @@ function buildBranchConnectionString({
 }
 
 function publicBranchEndpointHostname({
-  branch,
   endpoint,
   env,
 }: {
-  branch: typeof schema.branches.$inferSelect;
   endpoint: typeof schema.endpoints.$inferSelect;
   env: ApiEnv;
 }) {
@@ -649,27 +646,12 @@ function publicBranchEndpointHostname({
     return endpoint.hostname;
   }
 
-  const freeDnsZone = normalizeIngressFreeDnsZone(
-    env.OPENBIKA_INGRESS_FREE_DNS_ZONE,
-  );
   const embeddedIp = parseIngressEmbeddedPublicIpv4(
     env.OPENBIKA_INGRESS_PUBLIC_IPV4 ?? "",
   );
 
-  if (freeDnsZone !== null && embeddedIp !== null) {
-    return suggestWorkloadEmbeddedIpIngressHostname(
-      branch.id,
-      embeddedIp,
-      freeDnsZone,
-    );
-  }
-
-  const publicBaseDomain =
-    env.OPENBIKA_EDGE_PUBLIC_BASE_DOMAIN?.trim() ||
-    env.OPENBIKA_PUBLIC_BASE_DOMAIN?.trim();
-
-  if (publicBaseDomain) {
-    return suggestWorkloadEdgeHostname(branch.id, publicBaseDomain);
+  if (embeddedIp !== null) {
+    return embeddedIp;
   }
 
   const apiPublicHostname = new URL(env.API_PUBLIC_URL).hostname;
@@ -2232,7 +2214,6 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
     });
     const publicHostname = branch.internetAccessEnabled
       ? publicBranchEndpointHostname({
-          branch,
           endpoint: fallbackEndpoint,
           env,
         })

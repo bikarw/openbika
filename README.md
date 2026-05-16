@@ -112,11 +112,12 @@ bun --filter @openbika/api dev
 bun --filter @openbika/worker dev
 ```
 
-**Free nip.io ingress on your laptop**: use `OPENBIKA_INGRESS_PUBLIC_IPV4=loopback`
-(or `127.0.0.1`) together with Docker Traefik and `nip.io`. If you leave `auto`,
-DNS points at your public WAN IP — traffic misses local Traefik, so workloads look “broken”.
+**Free ingress on your laptop**: set `OPENBIKA_INGRESS_FREE_DNS_ZONE=traefik.me`
+(or `nip.io` / `sslip.io`) and use `OPENBIKA_INGRESS_PUBLIC_IPV4=loopback`
+together with Docker Traefik. If you leave `auto`, DNS points at your public WAN
+IP — traffic misses local Traefik, so workloads look “broken”.
 
-End-to-end check (signup → Node bundle function → nip URL):
+End-to-end check (signup → Node bundle function → free-DNS URL):
 
 ```sh
 chmod +x scripts/smoke-portal-function-nip.sh

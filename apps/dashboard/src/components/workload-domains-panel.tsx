@@ -610,7 +610,7 @@ export function WorkloadDomainsPanel({ workloadId }: WorkloadDomainsPanelProps) 
                     title={
                       canGenerateRandomEdgeHostname(workload)
                         ? "New random hostname on the platform edge."
-                        : "Configure API edge (nip/sslip or OPENBIKA_PUBLIC_BASE_DOMAIN)."
+                        : "Configure API edge (free DNS or OPENBIKA_PUBLIC_BASE_DOMAIN)."
                     }
                     type="button"
                     variant="outline"

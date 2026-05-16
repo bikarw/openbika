@@ -288,7 +288,7 @@ export const workloadResponseSchema = z.object({
   edge: z
     .object({
       embeddedPublicIpv4: z.string().optional(),
-      freeDnsZone: z.enum(["nip.io", "sslip.io"]).optional(),
+      freeDnsZone: z.enum(["nip.io", "sslip.io", "traefik.me"]).optional(),
       publicBaseDomain: z.string(),
       suggestedDefaultHostname: z.string(),
     })
@@ -446,7 +446,9 @@ export function normalizeWorkloadCustomHostname(raw: string): string {
   }
 }
 
-export function tryNormalizeWorkloadIngressHostname(raw: string): string | null {
+export function tryNormalizeWorkloadIngressHostname(
+  raw: string,
+): string | null {
   try {
     return normalizeWorkloadCustomHostname(raw);
   } catch {
@@ -456,7 +458,11 @@ export function tryNormalizeWorkloadIngressHostname(raw: string): string | null 
 
 /** Punycode / ASCII hostname segment for ingress (matches Traefik Docker label rules). */
 export function ingressPunyHostname(part: string): string {
-  const trimmed = part.trim().replace(/^https?:\/\//i, "").split("/")[0] ?? "";
+  const trimmed =
+    part
+      .trim()
+      .replace(/^https?:\/\//i, "")
+      .split("/")[0] ?? "";
   if (!trimmed) {
     return part;
   }
@@ -485,14 +491,18 @@ export function suggestWorkloadEdgeHostname(
 }
 
 /** Suffixes with public wildcard DNS: `{anything}.{IPv4}.{zone}` → that IPv4. */
-export const ingressEmbeddedIpFreeDnsZones = ["nip.io", "sslip.io"] as const;
+export const ingressEmbeddedIpFreeDnsZones = [
+  "nip.io",
+  "sslip.io",
+  "traefik.me",
+] as const;
 export type IngressEmbeddedIpFreeDnsZone =
   (typeof ingressEmbeddedIpFreeDnsZones)[number];
 
 const IPV4_DOTTED_RE =
   /^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 
-/** Validates dotted IPv4 for nip.io/sslip-style hostnames (`id.203.0.113.54.nip.io`). */
+/** Validates dotted IPv4 for embedded-IP free DNS hostnames (`id.203.0.113.54.nip.io`). */
 export function parseIngressEmbeddedPublicIpv4(raw: string): string | null {
   const s = raw.trim();
   return IPV4_DOTTED_RE.test(s) ? s : null;
@@ -502,7 +512,7 @@ export function normalizeIngressFreeDnsZone(
   raw: string | undefined,
 ): IngressEmbeddedIpFreeDnsZone | null {
   const z = raw?.trim().toLowerCase();
-  return z === "nip.io" || z === "sslip.io" ? z : null;
+  return z === "nip.io" || z === "sslip.io" || z === "traefik.me" ? z : null;
 }
 
 /** RFC 1035 DNS label length limit. */
@@ -513,12 +523,13 @@ function truncateDnsLabel(raw: string, max = DNS_LABEL_MAX): string {
 }
 
 /**
- * Platform hostname resolved via nip.io/sslip wildcard DNS (Traefik-compatible; no registrar).
+ * Platform hostname resolved via embedded-IP wildcard DNS (Traefik-compatible; no registrar).
  * Requires a **routable** IPv4 (Let’s Encrypt HTTP-01 must reach this Traefik instance).
  *
  * - **nip.io**: `{workload-label}.{dotted IPv4}.nip.io` (nip resolves the embedded quad).
  * - **sslip.io**: `{workload-prefix}-{dashed IPv4}.sslip.io` — single left label
  *   with dashes instead of dots so sslip resolves to the same IPv4 from any resolver.
+ * - **traefik.me**: `{workload-prefix}-{dashed IPv4}.traefik.me`, matching Dokploy-style generated hosts.
  */
 export function suggestWorkloadEmbeddedIpIngressHostname(
   workloadId: string,
@@ -531,13 +542,12 @@ export function suggestWorkloadEmbeddedIpIngressHostname(
   }
   const left = truncateDnsLabel(workloadIdToEdgeDnsLabel(workloadId));
 
-  if (zone === "sslip.io") {
+  if (zone === "sslip.io" || zone === "traefik.me") {
     const dashedIp = ip.replaceAll(".", "-");
     const maxPrefixLen = DNS_LABEL_MAX - dashedIp.length - 1; // hyphen before dashed IP
-    const prefix =
-      maxPrefixLen > 0 ? truncateDnsLabel(left, maxPrefixLen) : "";
+    const prefix = maxPrefixLen > 0 ? truncateDnsLabel(left, maxPrefixLen) : "";
     const single = prefix.length > 0 ? `${prefix}-${dashedIp}` : dashedIp;
-    return ingressPunyHostname(`${single}.sslip.io`);
+    return ingressPunyHostname(`${single}.${zone}`);
   }
 
   return ingressPunyHostname(`${left}.${ip}.${zone}`);
@@ -560,10 +570,7 @@ export function readWorkloadPortsArray(value: unknown): number[] {
   }
   return value.filter(
     (p): p is number =>
-      typeof p === "number" &&
-      Number.isInteger(p) &&
-      p >= 1 &&
-      p <= 65535,
+      typeof p === "number" && Number.isInteger(p) && p >= 1 && p <= 65535,
   );
 }
 
@@ -601,7 +608,9 @@ export interface WorkloadIngressAppliedRoute extends WorkloadIngressDomain {
 }
 
 /** Public URL for one ingress row (host + scheme + PathPrefix semantics). */
-export function workloadIngressRoutePublicUrl(domain: WorkloadIngressDomain): string {
+export function workloadIngressRoutePublicUrl(
+  domain: WorkloadIngressDomain,
+): string {
   const scheme = domain.https ? "https" : "http";
   const host = ingressPunyHostname(domain.hostname);
   const path = normalizeWorkloadIngressPath(domain.path);
@@ -655,11 +664,7 @@ export function readObservedWorkloadIngressRoutes(
 function tryParseWorkloadIngressDomainRaw(
   value: unknown,
 ): WorkloadIngressDomain | null {
-  if (
-    value === null ||
-    typeof value !== "object" ||
-    Array.isArray(value)
-  ) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
   const r = value as Record<string, unknown>;
@@ -680,9 +685,7 @@ function tryParseWorkloadIngressDomainRaw(
     return null;
   }
   const pathNorm =
-    typeof r.path === "string"
-      ? normalizeWorkloadIngressPath(r.path)
-      : "/";
+    typeof r.path === "string" ? normalizeWorkloadIngressPath(r.path) : "/";
   const https = typeof r.https === "boolean" ? r.https : true;
   return {
     hostname: hostNorm,
@@ -692,7 +695,7 @@ function tryParseWorkloadIngressDomainRaw(
   };
 }
 
-/** When true, the provisioner skips the synthesized platform Traefik hostname (nip/sslip / owned base). */
+/** When true, the provisioner skips the synthesized platform Traefik hostname (free DNS / owned base). */
 export function readOmitPlatformHostname(
   desiredState: Record<string, unknown>,
 ): boolean {
@@ -721,7 +724,10 @@ export function readWorkloadIngressDomains(
     return [];
   }
   const rec = ingress as Record<string, unknown>;
-  const effective = resolveWorkloadEffectiveListenPorts(desiredState, workloadKind);
+  const effective = resolveWorkloadEffectiveListenPorts(
+    desiredState,
+    workloadKind,
+  );
   const fallbackPort = effective[0];
 
   const domainList = rec.domains;
@@ -821,7 +827,8 @@ export type PatchWorkloadIngressDomainsRequest = z.infer<
 export const patchWorkloadIngressHostnamesRequestSchema =
   patchWorkloadIngressDomainsRequestSchema;
 
-export type PatchWorkloadIngressHostnamesRequest = PatchWorkloadIngressDomainsRequest;
+export type PatchWorkloadIngressHostnamesRequest =
+  PatchWorkloadIngressDomainsRequest;
 
 export function dedupeWorkloadIngressDomainsOrThrow(
   domains: WorkloadIngressDomain[],
