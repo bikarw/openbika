@@ -1901,17 +1901,23 @@ function ProjectOverview({
       </div>
 
       <div className="grid gap-3">
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <h2 className="font-semibold text-lg tracking-tight">Services</h2>
           {services.length > 0 ? (
-            <Link
-              className="shrink-0 text-muted-foreground text-sm hover:text-foreground"
-              params={{ organizationSlug, projectSlug }}
-              preload="intent"
-              to="/$organizationSlug/projects/$projectSlug/services"
-            >
-              View all →
-            </Link>
+            <div className="flex shrink-0 flex-wrap items-center gap-3">
+              <CreateDatabaseModal
+                existingNames={databases.map((d) => d.name)}
+                onCreateDatabase={onCreateDatabase}
+              />
+              <Link
+                className="text-muted-foreground text-sm hover:text-foreground"
+                params={{ organizationSlug, projectSlug }}
+                preload="intent"
+                to="/$organizationSlug/projects/$projectSlug/services"
+              >
+                View all →
+              </Link>
+            </div>
           ) : null}
         </div>
         {services.length === 0 ? (
@@ -1986,23 +1992,29 @@ function ServicesPanel({
 
   return (
     <div className="grid gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <FilterChip
-          active={filter === "all"}
-          label={`All (${services.length})`}
-          onClick={() => setFilter("all")}
-        />
-        <FilterChip
-          active={filter === "database"}
-          icon={<Database className="size-3.5" />}
-          label={`Databases (${databases.length})`}
-          onClick={() => setFilter("database")}
-        />
-        <FilterChip
-          active={filter === "workload"}
-          icon={<Workflow className="size-3.5" />}
-          label={`Workloads (${workloads.length})`}
-          onClick={() => setFilter("workload")}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <FilterChip
+            active={filter === "all"}
+            label={`All (${services.length})`}
+            onClick={() => setFilter("all")}
+          />
+          <FilterChip
+            active={filter === "database"}
+            icon={<Database className="size-3.5" />}
+            label={`Databases (${databases.length})`}
+            onClick={() => setFilter("database")}
+          />
+          <FilterChip
+            active={filter === "workload"}
+            icon={<Workflow className="size-3.5" />}
+            label={`Workloads (${workloads.length})`}
+            onClick={() => setFilter("workload")}
+          />
+        </div>
+        <CreateDatabaseModal
+          existingNames={databases.map((d) => d.name)}
+          onCreateDatabase={onCreateDatabase}
         />
       </div>
       <ServicesGrid
