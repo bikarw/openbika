@@ -309,6 +309,13 @@ run_migrations() {
   run_in_install_dir "/usr/local/bin/bun --env-file=$env_file run db:migrate"
 }
 
+build_dashboard() {
+  log "Building dashboard"
+  local env_file
+  env_file="$(printf "%q" "$INSTALL_DIR/.env")"
+  run_in_install_dir "cd apps/dashboard && /usr/local/bin/bun --env-file=$env_file run build"
+}
+
 write_systemd_units() {
   log "Installing systemd services"
   cat >/etc/systemd/system/openbika-api.service <<EOF
@@ -378,7 +385,8 @@ WantedBy=multi-user.target
 EOF
 
   systemctl daemon-reload
-  systemctl enable --now openbika-api.service openbika-worker.service openbika-dashboard.service
+  systemctl enable openbika-api.service openbika-worker.service openbika-dashboard.service
+  systemctl restart openbika-api.service openbika-worker.service openbika-dashboard.service
 }
 
 check_health() {
@@ -431,6 +439,7 @@ main() {
   checkout_repo
   write_env_files
   install_dependencies
+  build_dashboard
   start_compose
   run_migrations
   write_systemd_units
