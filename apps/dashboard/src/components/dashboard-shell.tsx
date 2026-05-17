@@ -1,6 +1,6 @@
 import type * as React from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { Boxes, LogOut, Settings } from 'lucide-react'
+import { Boxes, HardDrive, LogOut, Settings } from 'lucide-react'
 
 import { Badge } from '@openbika/ui/components/badge'
 import { Button } from '@openbika/ui/components/button'
@@ -20,7 +20,7 @@ import {
 } from '@openbika/ui/components/sidebar'
 
 export interface DashboardShellProps {
-  activeNav?: 'projects' | 'settings'
+  activeNav?: 'destinations' | 'projects' | 'settings'
   children: React.ReactNode
   headerStatus?: 'error' | 'loading' | 'ok' | null
   onSignOut: () => void
@@ -40,14 +40,17 @@ export function DashboardShell({
 }: DashboardShellProps) {
   const navigate = useNavigate()
 
-  function navigateTo(path: 'projects' | 'settings') {
+  function navigateTo(path: 'destinations' | 'projects' | 'settings') {
     if (!organizationSlug) return
+    const target =
+      path === 'projects'
+        ? '/$organizationSlug/projects'
+        : path === 'settings'
+          ? '/$organizationSlug/settings'
+          : '/$organizationSlug/destinations'
     void navigate({
-      to:
-        path === 'projects'
-          ? '/$organizationSlug/projects'
-          : '/$organizationSlug/settings',
       params: { organizationSlug },
+      to: target,
     })
   }
 
@@ -88,6 +91,15 @@ export function DashboardShell({
                   >
                     <Boxes className="size-4" />
                     Projects
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    isActive={activeNav === 'destinations'}
+                    onClick={() => navigateTo('destinations')}
+                  >
+                    <HardDrive className="size-4" />
+                    Destinations
                   </SidebarMenuButton>
                 </SidebarMenuItem>
                 <SidebarMenuItem>

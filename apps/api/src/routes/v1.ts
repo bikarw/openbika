@@ -7,6 +7,7 @@ import {
   createOrganizationRequestSchema,
   createProjectRequestSchema,
   createRestoreRequestSchema,
+  createS3DestinationRequestSchema,
   createWorkloadRequestSchema,
   dedupeWorkloadIngressDomains,
   executeBranchQueryRequestSchema,
@@ -14,6 +15,7 @@ import {
   normalizeServerDomainHost,
   parseIngressEmbeddedPublicIpv4,
   patchBranchSettingsRequestSchema,
+  patchS3DestinationRequestSchema,
   patchServerDomainSettingsRequestSchema,
   patchWorkloadIngressDomainsRequestSchema,
   patchWorkloadEnvRequestSchema,
@@ -29,6 +31,7 @@ import {
   type ProvisionWorkloadInput,
   type ServerDomainCertificateType,
   type ServerDomainSettingsResponse,
+  type S3DestinationResponse,
   type WorkloadResponse,
 } from "@openbika/contracts";
 import { createPool, schema } from "@openbika/db";
@@ -37,7 +40,7 @@ import { createId, generateULID } from "@openbika/domain";
 import { readDockerContainerLogs } from "@openbika/provisioning";
 import type { ApiEnv } from "@openbika/env";
 import { workflowNames } from "@openbika/queue";
-import { and, eq, inArray, lte } from "drizzle-orm";
+import { and, desc, eq, inArray, lte } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
@@ -117,6 +120,8 @@ interface SerializableBranch {
 type SerializableWorkload = typeof schema.projectWorkloads.$inferSelect;
 type SerializableWebServerSettings =
   typeof schema.webServerSettings.$inferSelect;
+
+type SerializableS3Destination = typeof schema.s3Destinations.$inferSelect;
 
 interface WorkloadProvisioningTarget {
   id: string;
@@ -351,6 +356,25 @@ function serializeWebServerSettings(
     lastError: settings.lastError,
     letsEncryptEmail: settings.letsEncryptEmail,
     updatedAt: settings.updatedAt.toISOString(),
+  };
+}
+
+function serializeS3Destination(
+  row: SerializableS3Destination,
+): S3DestinationResponse {
+  return {
+    accessKey: row.accessKey,
+    additionalFlags: row.additionalFlags,
+    bucket: row.bucket,
+    createdAt: row.createdAt.toISOString(),
+    endpoint: row.endpoint,
+    hasSecret: row.secretAccessKey.length > 0,
+    id: row.id,
+    name: row.name,
+    organizationId: row.organizationId,
+    provider: row.provider,
+    region: row.region,
+    updatedAt: row.updatedAt.toISOString(),
   };
 }
 
@@ -1451,6 +1475,186 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       },
       201,
     );
+  });
+
+  routes.get("/s3-destinations", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const organizationId = c.req.query("organizationId");
+
+    if (!organizationId) {
+      throw new HTTPException(400, {
+        message: "organizationId query parameter is required",
+      });
+    }
+
+    await assertOrganizationAccess({
+      db,
+      organizationId,
+      userId: user.id,
+    });
+
+    const rows = await db
+      .select()
+      .from(schema.s3Destinations)
+      .where(eq(schema.s3Destinations.organizationId, organizationId))
+      .orderBy(desc(schema.s3Destinations.createdAt));
+
+    return c.json({
+      destinations: rows.map(serializeS3Destination),
+    });
+  });
+
+  routes.post("/s3-destinations", async (c) => {
+    const user = requireUser(c);
+    const input = await parseJson(c, createS3DestinationRequestSchema);
+    const db = c.get("db");
+
+    await assertOrganizationAccess({
+      db,
+      organizationId: input.organizationId,
+      requireManager: true,
+      userId: user.id,
+    });
+
+    const inserted = first(
+      await db
+        .insert(schema.s3Destinations)
+        .values({
+          accessKey: input.accessKey,
+          additionalFlags: input.additionalFlags ?? [],
+          bucket: input.bucket,
+          endpoint: input.endpoint,
+          id: createId("s3_destination"),
+          name: input.name,
+          organizationId: input.organizationId,
+          provider: input.provider,
+          region: input.region,
+          secretAccessKey: input.secretAccessKey,
+        })
+        .returning(),
+    );
+
+    if (!inserted) {
+      throw new HTTPException(500, {
+        message: "Could not create destination",
+      });
+    }
+
+    return c.json(
+      {
+        destination: serializeS3Destination(inserted),
+      },
+      201,
+    );
+  });
+
+  routes.patch("/s3-destinations/:destinationId", async (c) => {
+    const user = requireUser(c);
+    const destinationId = c.req.param("destinationId");
+    const input = await parseJson(c, patchS3DestinationRequestSchema);
+    const db = c.get("db");
+
+    const existing = first(
+      await db
+        .select()
+        .from(schema.s3Destinations)
+        .where(eq(schema.s3Destinations.id, destinationId))
+        .limit(1),
+    );
+
+    if (!existing) {
+      throw new HTTPException(404, {
+        message: "Destination not found",
+      });
+    }
+
+    await assertOrganizationAccess({
+      db,
+      organizationId: existing.organizationId,
+      requireManager: true,
+      userId: user.id,
+    });
+
+    const patch: Partial<typeof schema.s3Destinations.$inferInsert> = {
+      updatedAt: new Date(),
+    };
+
+    if (input.name !== undefined) {
+      patch.name = input.name;
+    }
+    if (input.provider !== undefined) {
+      patch.provider = input.provider;
+    }
+    if (input.accessKey !== undefined) {
+      patch.accessKey = input.accessKey;
+    }
+    if (input.secretAccessKey !== undefined) {
+      patch.secretAccessKey = input.secretAccessKey;
+    }
+    if (input.bucket !== undefined) {
+      patch.bucket = input.bucket;
+    }
+    if (input.region !== undefined) {
+      patch.region = input.region;
+    }
+    if (input.endpoint !== undefined) {
+      patch.endpoint = input.endpoint;
+    }
+    if (input.additionalFlags !== undefined) {
+      patch.additionalFlags = input.additionalFlags;
+    }
+
+    const saved = first(
+      await db
+        .update(schema.s3Destinations)
+        .set(patch)
+        .where(eq(schema.s3Destinations.id, destinationId))
+        .returning(),
+    );
+
+    if (!saved) {
+      throw new HTTPException(500, {
+        message: "Could not update destination",
+      });
+    }
+
+    return c.json({
+      destination: serializeS3Destination(saved),
+    });
+  });
+
+  routes.delete("/s3-destinations/:destinationId", async (c) => {
+    const user = requireUser(c);
+    const destinationId = c.req.param("destinationId");
+    const db = c.get("db");
+
+    const existing = first(
+      await db
+        .select()
+        .from(schema.s3Destinations)
+        .where(eq(schema.s3Destinations.id, destinationId))
+        .limit(1),
+    );
+
+    if (!existing) {
+      throw new HTTPException(404, {
+        message: "Destination not found",
+      });
+    }
+
+    await assertOrganizationAccess({
+      db,
+      organizationId: existing.organizationId,
+      requireManager: true,
+      userId: user.id,
+    });
+
+    await db
+      .delete(schema.s3Destinations)
+      .where(eq(schema.s3Destinations.id, destinationId));
+
+    return c.body(null, 204);
   });
 
   routes.get("/projects", async (c) => {

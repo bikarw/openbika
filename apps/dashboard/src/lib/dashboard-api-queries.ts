@@ -18,6 +18,8 @@ export const dashboardKeys = {
   health: () => [...dashboardKeys.root, "health"] as const,
   serverDomainSettings: () =>
     [...dashboardKeys.root, "server-domain-settings"] as const,
+  s3Destinations: (organizationId: string) =>
+    [...dashboardKeys.root, "s3-destinations", organizationId] as const,
   projects: (organizationId: string) =>
     [...dashboardKeys.root, "projects", organizationId] as const,
   projectSummaries: (organizationId: string) =>
@@ -59,6 +61,10 @@ export async function patchServerDomainSettingsRequest(
   input: PatchServerDomainSettingsRequest,
 ) {
   return getDashboardApiClient().patchServerDomainSettings(input);
+}
+
+export async function fetchS3Destinations(organizationId: string) {
+  return getDashboardApiClient().listS3Destinations(organizationId);
 }
 
 export async function fetchProjects(organizationId: string) {

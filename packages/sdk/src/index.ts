@@ -14,6 +14,7 @@ import {
   type CreateOrganizationRequest,
   type CreateProjectRequest,
   type CreateRestoreRequest,
+  type CreateS3DestinationRequest,
   type CreateWorkloadRequest,
   type DatabaseResponse,
   databaseResponseSchema,
@@ -23,6 +24,7 @@ import {
   type OrganizationResponse,
   organizationResponseSchema,
   type PatchBranchSettingsRequest,
+  type PatchS3DestinationRequest,
   type ProjectResponse,
   type PatchWorkloadEnvRequest,
   type PatchWorkloadIngressDomainsRequest,
@@ -32,6 +34,8 @@ import {
   projectSummaryResponseSchema,
   type RestoreJobResponse,
   restoreJobResponseSchema,
+  type S3DestinationResponse,
+  s3DestinationResponseSchema,
   type ServerDomainSettingsResponse,
   serverDomainSettingsResponseSchema,
   type WorkloadResponse,
@@ -93,7 +97,7 @@ export class OpenbikaApiError extends Error {
 
 interface RequestOptions<TResponse> {
   body?: unknown;
-  method?: "GET" | "PATCH" | "POST";
+  method?: "DELETE" | "GET" | "PATCH" | "POST";
   parse: (body: unknown) => TResponse;
   path: string;
 }
@@ -178,6 +182,53 @@ export class OpenbikaClient {
           readProperty(body, "settings"),
         ),
       path: "/v1/settings/server-domain",
+    });
+  }
+
+  async listS3Destinations(
+    organizationId: string,
+  ): Promise<S3DestinationResponse[]> {
+    const search = new URLSearchParams({ organizationId });
+
+    return this.request({
+      parse: (body) =>
+        s3DestinationResponseSchema
+          .array()
+          .parse(readProperty(body, "destinations")),
+      path: `/v1/s3-destinations?${search}`,
+    });
+  }
+
+  async createS3Destination(
+    input: CreateS3DestinationRequest,
+  ): Promise<S3DestinationResponse> {
+    return this.request({
+      body: input,
+      method: "POST",
+      parse: (body) =>
+        s3DestinationResponseSchema.parse(readProperty(body, "destination")),
+      path: "/v1/s3-destinations",
+    });
+  }
+
+  async patchS3Destination(
+    destinationId: string,
+    input: PatchS3DestinationRequest,
+  ): Promise<S3DestinationResponse> {
+    return this.request({
+      body: input,
+      method: "PATCH",
+      parse: (body) =>
+        s3DestinationResponseSchema.parse(readProperty(body, "destination")),
+      path: `/v1/s3-destinations/${encodeURIComponent(destinationId)}`,
+    });
+  }
+
+  async deleteS3Destination(destinationId: string): Promise<void> {
+    await this.request({
+      method: "DELETE",
+      parse: () => undefined,
+      path: `/v1/s3-destinations/${encodeURIComponent(destinationId)}`,
     });
   }
 

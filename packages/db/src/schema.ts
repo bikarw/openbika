@@ -170,6 +170,31 @@ export const memberships = pgTable(
   }),
 );
 
+/** S3-compatible backup/object-storage destinations (credentials stored in plaintext; encrypt-at-rest is future work). */
+export const s3Destinations = pgTable(
+  "s3_destinations",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    provider: text("provider"),
+    accessKey: text("access_key").notNull(),
+    secretAccessKey: text("secret_access_key").notNull(),
+    bucket: text("bucket").notNull(),
+    region: text("region").notNull(),
+    endpoint: text("endpoint").notNull(),
+    additionalFlags: text("additional_flags").array().notNull(),
+    ...timestamps,
+  },
+  (table) => ({
+    organizationIdIdx: index("s3_destinations_organization_id_idx").on(
+      table.organizationId,
+    ),
+  }),
+);
+
 export const webServerSettings = pgTable(
   "web_server_settings",
   {

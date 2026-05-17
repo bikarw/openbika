@@ -17,7 +17,8 @@ export type EntityPrefix =
   | "bkp"
   | "rst"
   | "wss"
-  | "wkl";
+  | "wkl"
+  | "s3d";
 
 const prefixMap = {
   backup_job: "bkp",
@@ -29,6 +30,7 @@ const prefixMap = {
   project: "prj",
   project_workload: "wkl",
   restore_job: "rst",
+  s3_destination: "s3d",
   web_server_settings: "wss",
 } as const satisfies Record<string, EntityPrefix>;
 

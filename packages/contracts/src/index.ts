@@ -529,7 +529,7 @@ function truncateDnsLabel(raw: string, max = DNS_LABEL_MAX): string {
  * - **nip.io**: `{workload-label}.{dotted IPv4}.nip.io` (nip resolves the embedded quad).
  * - **sslip.io**: `{workload-prefix}-{dashed IPv4}.sslip.io` — single left label
  *   with dashes instead of dots so sslip resolves to the same IPv4 from any resolver.
- * - **traefik.me**: `{workload-prefix}-{dashed IPv4}.traefik.me`, matching Dokploy-style generated hosts.
+ * - **traefik.me**: `{workload-prefix}-{dashed IPv4}.traefik.me`, matching typical wildcard-generated hosts.
  */
 export function suggestWorkloadEmbeddedIpIngressHostname(
   workloadId: string,
@@ -981,4 +981,71 @@ export const provisionWorkloadInputSchema = z.object({
 });
 export type ProvisionWorkloadInput = z.infer<
   typeof provisionWorkloadInputSchema
+>;
+
+/** Matches rclone-style CLI flags for S3 remotes. */
+export const s3DestinationAdditionalFlagRegex =
+  /^--[a-zA-Z0-9-]+(=[a-zA-Z0-9._:/@-]+)?$/;
+export const s3DestinationAdditionalFlagErrorMessage =
+  "Invalid flag format. Must start with -- (e.g. --s3-sign-accept-encoding=false)";
+
+const s3DestinationAdditionalFlagsSchema = z.array(
+  z
+    .string()
+    .regex(
+      s3DestinationAdditionalFlagRegex,
+      s3DestinationAdditionalFlagErrorMessage,
+    ),
+);
+
+export const createS3DestinationRequestSchema = z.object({
+  accessKey: z.string().min(1),
+  additionalFlags: s3DestinationAdditionalFlagsSchema.optional(),
+  bucket: z.string().min(1),
+  endpoint: z.string().min(1),
+  name: z.string().min(1),
+  organizationId: idSchema,
+  provider: z.string().min(1),
+  region: z.string().min(1),
+  secretAccessKey: z.string().min(1),
+});
+export type CreateS3DestinationRequest = z.infer<
+  typeof createS3DestinationRequestSchema
+>;
+
+export const patchS3DestinationRequestSchema = z
+  .object({
+    accessKey: z.string().min(1).optional(),
+    additionalFlags: s3DestinationAdditionalFlagsSchema.optional(),
+    bucket: z.string().min(1).optional(),
+    endpoint: z.string().min(1).optional(),
+    name: z.string().min(1).optional(),
+    provider: z.string().min(1).optional(),
+    region: z.string().min(1).optional(),
+    secretAccessKey: z.string().min(1).optional(),
+  })
+  .refine(
+    (value) => Object.values(value).some((field) => field !== undefined),
+    { message: "At least one field is required" },
+  );
+export type PatchS3DestinationRequest = z.infer<
+  typeof patchS3DestinationRequestSchema
+>;
+
+export const s3DestinationResponseSchema = z.object({
+  accessKey: z.string(),
+  additionalFlags: z.array(z.string()),
+  bucket: z.string(),
+  createdAt: z.string(),
+  endpoint: z.string(),
+  hasSecret: z.boolean(),
+  id: idSchema,
+  name: z.string(),
+  organizationId: idSchema,
+  provider: z.string().nullable(),
+  region: z.string(),
+  updatedAt: z.string(),
+});
+export type S3DestinationResponse = z.infer<
+  typeof s3DestinationResponseSchema
 >;

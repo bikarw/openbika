@@ -16,6 +16,7 @@ import { Route as ProtectedRouteRouteImport } from './routes/_protected/route'
 import { Route as ProtectedIndexRouteImport } from './routes/_protected/index'
 import { Route as ProtectedOrganizationSlugSettingsIndexRouteImport } from './routes/_protected/$organizationSlug/settings/index'
 import { Route as ProtectedOrganizationSlugProjectsIndexRouteImport } from './routes/_protected/$organizationSlug/projects/index'
+import { Route as ProtectedOrganizationSlugDestinationsIndexRouteImport } from './routes/_protected/$organizationSlug/destinations/index'
 import { Route as ProtectedOrganizationSlugProjectsProjectSlugRouteImport } from './routes/_protected/$organizationSlug/projects/$projectSlug'
 import { Route as ProtectedOrganizationSlugProjectsProjectSlugIndexRouteImport } from './routes/_protected/$organizationSlug/projects/$projectSlug/index'
 import { Route as ProtectedOrganizationSlugProjectsProjectSlugWorkloadsIndexRouteImport } from './routes/_protected/$organizationSlug/projects/$projectSlug/workloads/index'
@@ -69,6 +70,12 @@ const ProtectedOrganizationSlugProjectsIndexRoute =
   ProtectedOrganizationSlugProjectsIndexRouteImport.update({
     id: '/$organizationSlug/projects/',
     path: '/$organizationSlug/projects/',
+    getParentRoute: () => ProtectedRouteRoute,
+  } as any)
+const ProtectedOrganizationSlugDestinationsIndexRoute =
+  ProtectedOrganizationSlugDestinationsIndexRouteImport.update({
+    id: '/$organizationSlug/destinations/',
+    path: '/$organizationSlug/destinations/',
     getParentRoute: () => ProtectedRouteRoute,
   } as any)
 const ProtectedOrganizationSlugProjectsProjectSlugRoute =
@@ -219,6 +226,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
   '/$organizationSlug/projects/$projectSlug': typeof ProtectedOrganizationSlugProjectsProjectSlugRouteWithChildren
+  '/$organizationSlug/destinations/': typeof ProtectedOrganizationSlugDestinationsIndexRoute
   '/$organizationSlug/projects/': typeof ProtectedOrganizationSlugProjectsIndexRoute
   '/$organizationSlug/settings/': typeof ProtectedOrganizationSlugSettingsIndexRoute
   '/$organizationSlug/projects/$projectSlug/': typeof ProtectedOrganizationSlugProjectsProjectSlugIndexRoute
@@ -244,6 +252,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/signup': typeof SignupRoute
   '/': typeof ProtectedIndexRoute
+  '/$organizationSlug/destinations': typeof ProtectedOrganizationSlugDestinationsIndexRoute
   '/$organizationSlug/projects': typeof ProtectedOrganizationSlugProjectsIndexRoute
   '/$organizationSlug/settings': typeof ProtectedOrganizationSlugSettingsIndexRoute
   '/$organizationSlug/projects/$projectSlug': typeof ProtectedOrganizationSlugProjectsProjectSlugIndexRoute
@@ -270,6 +279,7 @@ export interface FileRoutesById {
   '/signup': typeof SignupRoute
   '/_protected/': typeof ProtectedIndexRoute
   '/_protected/$organizationSlug/projects/$projectSlug': typeof ProtectedOrganizationSlugProjectsProjectSlugRouteWithChildren
+  '/_protected/$organizationSlug/destinations/': typeof ProtectedOrganizationSlugDestinationsIndexRoute
   '/_protected/$organizationSlug/projects/': typeof ProtectedOrganizationSlugProjectsIndexRoute
   '/_protected/$organizationSlug/settings/': typeof ProtectedOrganizationSlugSettingsIndexRoute
   '/_protected/$organizationSlug/projects/$projectSlug/': typeof ProtectedOrganizationSlugProjectsProjectSlugIndexRoute
@@ -298,6 +308,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/signup'
     | '/$organizationSlug/projects/$projectSlug'
+    | '/$organizationSlug/destinations/'
     | '/$organizationSlug/projects/'
     | '/$organizationSlug/settings/'
     | '/$organizationSlug/projects/$projectSlug/'
@@ -323,6 +334,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/signup'
     | '/'
+    | '/$organizationSlug/destinations'
     | '/$organizationSlug/projects'
     | '/$organizationSlug/settings'
     | '/$organizationSlug/projects/$projectSlug'
@@ -348,6 +360,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/_protected/'
     | '/_protected/$organizationSlug/projects/$projectSlug'
+    | '/_protected/$organizationSlug/destinations/'
     | '/_protected/$organizationSlug/projects/'
     | '/_protected/$organizationSlug/settings/'
     | '/_protected/$organizationSlug/projects/$projectSlug/'
@@ -425,6 +438,13 @@ declare module '@tanstack/react-router' {
       path: '/$organizationSlug/projects'
       fullPath: '/$organizationSlug/projects/'
       preLoaderRoute: typeof ProtectedOrganizationSlugProjectsIndexRouteImport
+      parentRoute: typeof ProtectedRouteRoute
+    }
+    '/_protected/$organizationSlug/destinations/': {
+      id: '/_protected/$organizationSlug/destinations/'
+      path: '/$organizationSlug/destinations'
+      fullPath: '/$organizationSlug/destinations/'
+      preLoaderRoute: typeof ProtectedOrganizationSlugDestinationsIndexRouteImport
       parentRoute: typeof ProtectedRouteRoute
     }
     '/_protected/$organizationSlug/projects/$projectSlug': {
@@ -646,6 +666,7 @@ const ProtectedOrganizationSlugProjectsProjectSlugRouteWithChildren =
 interface ProtectedRouteRouteChildren {
   ProtectedIndexRoute: typeof ProtectedIndexRoute
   ProtectedOrganizationSlugProjectsProjectSlugRoute: typeof ProtectedOrganizationSlugProjectsProjectSlugRouteWithChildren
+  ProtectedOrganizationSlugDestinationsIndexRoute: typeof ProtectedOrganizationSlugDestinationsIndexRoute
   ProtectedOrganizationSlugProjectsIndexRoute: typeof ProtectedOrganizationSlugProjectsIndexRoute
   ProtectedOrganizationSlugSettingsIndexRoute: typeof ProtectedOrganizationSlugSettingsIndexRoute
 }
@@ -654,6 +675,8 @@ const ProtectedRouteRouteChildren: ProtectedRouteRouteChildren = {
   ProtectedIndexRoute: ProtectedIndexRoute,
   ProtectedOrganizationSlugProjectsProjectSlugRoute:
     ProtectedOrganizationSlugProjectsProjectSlugRouteWithChildren,
+  ProtectedOrganizationSlugDestinationsIndexRoute:
+    ProtectedOrganizationSlugDestinationsIndexRoute,
   ProtectedOrganizationSlugProjectsIndexRoute:
     ProtectedOrganizationSlugProjectsIndexRoute,
   ProtectedOrganizationSlugSettingsIndexRoute:
