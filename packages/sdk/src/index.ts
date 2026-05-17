@@ -1,5 +1,6 @@
 import {
   type BackupJobResponse,
+  type BackupScheduleResponse,
   type BranchConnectionResponse,
   branchConnectionResponseSchema,
   type BranchQueryResponse,
@@ -7,8 +8,11 @@ import {
   type BranchSchemaResponse,
   branchSchemaResponseSchema,
   backupJobResponseSchema,
+  backupScheduleResponseSchema,
   type BranchResponse,
   branchResponseSchema,
+  type CreateBackupRequest,
+  type CreateBackupScheduleRequest,
   type CreateBranchRequest,
   type CreateDatabaseRequest,
   type CreateOrganizationRequest,
@@ -23,6 +27,7 @@ import {
   healthResponseSchema,
   type OrganizationResponse,
   organizationResponseSchema,
+  type PatchBackupScheduleRequest,
   type PatchBranchSettingsRequest,
   type PatchS3DestinationRequest,
   type ProjectResponse,
@@ -436,8 +441,30 @@ export class OpenbikaClient {
     });
   }
 
-  async createBackup(databaseId: string): Promise<BackupJobResponse> {
+  async listDatabaseBackups(
+    databaseId: string,
+    input: { branchId?: string } = {},
+  ): Promise<BackupJobResponse[]> {
+    const search = new URLSearchParams();
+    if (input.branchId) {
+      search.set("branchId", input.branchId);
+    }
+    const query = search.size > 0 ? `?${search.toString()}` : "";
     return this.request({
+      parse: (body) =>
+        backupJobResponseSchema
+          .array()
+          .parse(readProperty(body, "backupJobs")),
+      path: `/v1/databases/${encodeURIComponent(databaseId)}/backups${query}`,
+    });
+  }
+
+  async createBackup(
+    databaseId: string,
+    input: CreateBackupRequest = {},
+  ): Promise<BackupJobResponse> {
+    return this.request({
+      body: input,
       method: "POST",
       parse: (body) =>
         backupJobResponseSchema.parse(readProperty(body, "backupJob")),
@@ -463,6 +490,58 @@ export class OpenbikaClient {
       parse: (body) =>
         restoreJobResponseSchema.parse(readProperty(body, "restoreJob")),
       path: `/v1/backups/${encodeURIComponent(backupJobId)}/restores`,
+    });
+  }
+
+  async listBackupSchedules(
+    databaseId: string,
+    input: { branchId?: string } = {},
+  ): Promise<BackupScheduleResponse[]> {
+    const search = new URLSearchParams();
+    if (input.branchId) {
+      search.set("branchId", input.branchId);
+    }
+    const query = search.size > 0 ? `?${search.toString()}` : "";
+    return this.request({
+      parse: (body) =>
+        backupScheduleResponseSchema
+          .array()
+          .parse(readProperty(body, "schedules")),
+      path: `/v1/databases/${encodeURIComponent(databaseId)}/backup-schedules${query}`,
+    });
+  }
+
+  async createBackupSchedule(
+    databaseId: string,
+    input: CreateBackupScheduleRequest,
+  ): Promise<BackupScheduleResponse> {
+    return this.request({
+      body: input,
+      method: "POST",
+      parse: (body) =>
+        backupScheduleResponseSchema.parse(readProperty(body, "schedule")),
+      path: `/v1/databases/${encodeURIComponent(databaseId)}/backup-schedules`,
+    });
+  }
+
+  async patchBackupSchedule(
+    scheduleId: string,
+    input: PatchBackupScheduleRequest,
+  ): Promise<BackupScheduleResponse> {
+    return this.request({
+      body: input,
+      method: "PATCH",
+      parse: (body) =>
+        backupScheduleResponseSchema.parse(readProperty(body, "schedule")),
+      path: `/v1/backup-schedules/${encodeURIComponent(scheduleId)}`,
+    });
+  }
+
+  async deleteBackupSchedule(scheduleId: string): Promise<void> {
+    await this.request({
+      method: "DELETE",
+      parse: () => undefined,
+      path: `/v1/backup-schedules/${encodeURIComponent(scheduleId)}`,
     });
   }
 

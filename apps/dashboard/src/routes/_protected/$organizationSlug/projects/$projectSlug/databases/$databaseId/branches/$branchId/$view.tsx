@@ -16,11 +16,13 @@ export const Route = createFileRoute(
   "/_protected/$organizationSlug/projects/$projectSlug/databases/$databaseId/branches/$branchId/$view",
 )({
   parseParams: (raw: Record<string, string>) => {
-    const lowered = typeof raw.view === "string" ? raw.view.toLowerCase() : "overview";
-    const view =
+    const lowered =
+      typeof raw.view === "string" ? raw.view.toLowerCase() : "overview";
+    const view: "backups" | "overview" | "settings" | "sql" | "tables" =
       lowered === "sql" ||
       lowered === "tables" ||
       lowered === "settings" ||
+      lowered === "backups" ||
       lowered === "overview"
         ? lowered
         : "overview";

@@ -907,20 +907,155 @@ export type PatchBranchSettingsRequest = z.infer<
   typeof patchBranchSettingsRequestSchema
 >;
 
+/**
+ * S3 object-key prefix written by a backup. Accepts forward-slash separated
+ * segments; leading/trailing slashes are stripped at write time.
+ */
+export const backupPathPrefixSchema = z
+  .string()
+  .max(256)
+  .regex(/^[A-Za-z0-9_/\-.]*$/, {
+    message:
+      "Path may contain letters, digits, _, -, ., and / (no leading slash needed)",
+  });
+
 export const backupJobResponseSchema = z.object({
   artifactUri: z.string().nullable(),
+  branchId: idSchema.nullable(),
+  createdAt: z.string(),
   databaseId: idSchema,
   errorMessage: z.string().nullable(),
   finishedAt: z.string().nullable(),
   id: idSchema,
+  pathPrefix: z.string().nullable(),
+  s3DestinationId: idSchema.nullable(),
+  scheduleId: idSchema.nullable(),
   startedAt: z.string().nullable(),
   status: jobStatusSchema,
+  updatedAt: z.string(),
 });
 export type BackupJobResponse = z.infer<typeof backupJobResponseSchema>;
 
-export const createRestoreRequestSchema = z.object({
-  targetBranchName: z.string().min(1).max(63).default("restore"),
+export const createBackupRequestSchema = z.object({
+  branchId: idSchema.optional(),
+  pathPrefix: backupPathPrefixSchema.optional(),
+  s3DestinationId: idSchema.optional(),
 });
+export type CreateBackupRequest = z.infer<typeof createBackupRequestSchema>;
+
+export const listBackupJobsResponseSchema = z.object({
+  backupJobs: z.array(backupJobResponseSchema),
+});
+export type ListBackupJobsResponse = z.infer<
+  typeof listBackupJobsResponseSchema
+>;
+
+/**
+ * Cron expression with 5 space-separated fields (minute hour day-of-month month day-of-week).
+ * Permits digits, `*`, `,`, `-`, `/`, and uppercase weekday/month names commonly used by schedulers.
+ */
+export const cronExpressionSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .refine(
+    (value) => /^[\dA-Z*,/\-? ]+$/u.test(value) && value.trim().split(/\s+/u).length === 5,
+    {
+      message: "Cron expression must have 5 fields (minute hour dom month dow)",
+    },
+  );
+
+export const retentionKeepLastSchema = z.number().int().min(1).max(1000);
+
+export const backupScheduleResponseSchema = z.object({
+  branchId: idSchema,
+  createdAt: z.string(),
+  cronExpression: z.string(),
+  databaseId: idSchema,
+  enabled: z.boolean(),
+  id: idSchema,
+  lastRunAt: z.string().nullable(),
+  name: z.string(),
+  nextRunAt: z.string().nullable(),
+  organizationId: idSchema,
+  pathPrefix: z.string().nullable(),
+  retentionKeepLast: z.number().int().nullable(),
+  s3DestinationId: idSchema,
+  timezone: z.string(),
+  updatedAt: z.string(),
+});
+export type BackupScheduleResponse = z.infer<
+  typeof backupScheduleResponseSchema
+>;
+
+export const listBackupSchedulesResponseSchema = z.object({
+  schedules: z.array(backupScheduleResponseSchema),
+});
+export type ListBackupSchedulesResponse = z.infer<
+  typeof listBackupSchedulesResponseSchema
+>;
+
+export const createBackupScheduleRequestSchema = z.object({
+  branchId: idSchema,
+  cronExpression: cronExpressionSchema,
+  enabled: z.boolean().default(true),
+  name: z.string().min(1).max(120),
+  pathPrefix: backupPathPrefixSchema.optional(),
+  retentionKeepLast: retentionKeepLastSchema.optional(),
+  s3DestinationId: idSchema,
+  timezone: z.string().min(1).max(64).default("UTC"),
+});
+export type CreateBackupScheduleRequest = z.infer<
+  typeof createBackupScheduleRequestSchema
+>;
+
+export const patchBackupScheduleRequestSchema = z
+  .object({
+    cronExpression: cronExpressionSchema.optional(),
+    enabled: z.boolean().optional(),
+    name: z.string().min(1).max(120).optional(),
+    pathPrefix: backupPathPrefixSchema.nullable().optional(),
+    retentionKeepLast: retentionKeepLastSchema.nullable().optional(),
+    s3DestinationId: idSchema.optional(),
+    timezone: z.string().min(1).max(64).optional(),
+  })
+  .refine(
+    (value) => Object.values(value).some((field) => field !== undefined),
+    { message: "At least one field is required" },
+  );
+export type PatchBackupScheduleRequest = z.infer<
+  typeof patchBackupScheduleRequestSchema
+>;
+
+export const restoreModeSchema = z.enum([
+  "new_branch",
+  "overwrite_existing",
+]);
+export type RestoreMode = z.infer<typeof restoreModeSchema>;
+
+export const createRestoreRequestSchema = z
+  .object({
+    mode: restoreModeSchema.default("new_branch"),
+    /** Required when `mode === "overwrite_existing"`. */
+    targetBranchId: idSchema.optional(),
+    /** Required when `mode === "new_branch"`. */
+    targetBranchName: z.string().min(1).max(63).optional(),
+  })
+  .refine(
+    (value) => {
+      if (value.mode === "new_branch") {
+        return (
+          typeof value.targetBranchName === "string" &&
+          value.targetBranchName.trim().length > 0
+        );
+      }
+      return typeof value.targetBranchId === "string";
+    },
+    {
+      message:
+        "Provide targetBranchName when mode is new_branch, or targetBranchId when mode is overwrite_existing.",
+    },
+  );
 export type CreateRestoreRequest = z.infer<typeof createRestoreRequestSchema>;
 
 export const restoreJobResponseSchema = z.object({
@@ -944,7 +1079,10 @@ export type ProvisionClusterInput = z.infer<typeof provisionClusterInputSchema>;
 
 export const createBackupInputSchema = z.object({
   backupJobId: idSchema,
+  branchId: idSchema.nullable().optional(),
   clusterId: idSchema,
+  pathPrefix: z.string().nullable().optional(),
+  s3DestinationId: idSchema.nullable().optional(),
 });
 export type CreateBackupInput = z.infer<typeof createBackupInputSchema>;
 
@@ -952,6 +1090,7 @@ export const restoreBackupInputSchema = z.object({
   restoreJobId: idSchema,
   backupJobId: idSchema,
   targetBranchId: idSchema,
+  mode: restoreModeSchema,
 });
 export type RestoreBackupInput = z.infer<typeof restoreBackupInputSchema>;
 

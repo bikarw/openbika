@@ -6,11 +6,16 @@ export const Route = createFileRoute(
   "/_protected/$organizationSlug/projects/$projectSlug/branches/$branchId/$view",
 )({
   beforeLoad: async ({ context, params }) => {
-    let view =
+    const lowered =
       typeof params.view === "string" ? params.view.toLowerCase() : "overview";
-    if (!["overview", "settings", "sql", "tables"].includes(view)) {
-      view = "overview";
-    }
+    const view: "backups" | "overview" | "settings" | "sql" | "tables" =
+      lowered === "backups" ||
+      lowered === "overview" ||
+      lowered === "settings" ||
+      lowered === "sql" ||
+      lowered === "tables"
+        ? lowered
+        : "overview";
 
     const databaseId = await resolveDatabaseIdForBranch(
       context.queryClient,

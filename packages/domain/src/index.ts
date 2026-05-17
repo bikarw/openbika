@@ -15,6 +15,7 @@ export type EntityPrefix =
   | "br"
   | "ep"
   | "bkp"
+  | "bks"
   | "rst"
   | "wss"
   | "wkl"
@@ -22,6 +23,7 @@ export type EntityPrefix =
 
 const prefixMap = {
   backup_job: "bkp",
+  backup_schedule: "bks",
   branch: "br",
   database_cluster: "db",
   endpoint: "ep",

@@ -78,6 +78,7 @@ import * as React from "react";
 
 import { authClient } from "#/auth-client";
 import type { AuthUser } from "#/auth-session";
+import { BranchBackupsPanel } from "#/components/branch-backups-panel";
 import { HeaderUserMenu } from "#/components/header-user-menu";
 import {
   HeaderStatusBadgeSkeleton,
@@ -1144,6 +1145,8 @@ function WorkspaceDatabaseTabs({
     studioBranchId !== null && studioViewRaw === "tables";
   const isSettingsActive =
     studioBranchId !== null && studioViewRaw === "settings";
+  const isBackupsActive =
+    studioBranchId !== null && studioViewRaw === "backups";
 
   return (
     <nav
@@ -1176,6 +1179,16 @@ function WorkspaceDatabaseTabs({
         />
       ) : (
         <InsetTabMuted label="Tables" />
+      )}
+      {studioParams ? (
+        <InsetTabLink
+          active={isBackupsActive}
+          label="Backups"
+          params={{ ...studioParams, view: "backups" }}
+          to="/$organizationSlug/projects/$projectSlug/databases/$databaseId/branches/$branchId/$view"
+        />
+      ) : (
+        <InsetTabMuted label="Backups" />
       )}
       {studioParams ? (
         <InsetTabLink
@@ -1226,8 +1239,12 @@ function WorkspaceDatabaseBreadcrumbBranchSwitch({
     ? pathname.slice(branchesPrefix.length).replace(/\/$/u, "")
     : "";
 
-  let studioNavigateView: "overview" | "settings" | "sql" | "tables" =
-    "overview";
+  let studioNavigateView:
+    | "backups"
+    | "overview"
+    | "settings"
+    | "sql"
+    | "tables" = "overview";
   let urlBranchId: string | null = null;
 
   if (branchStudioTail.length > 0) {
@@ -1236,7 +1253,8 @@ function WorkspaceDatabaseBreadcrumbBranchSwitch({
       const [id, rawView] = segments;
       if (
         typeof id === "string" &&
-        (rawView === "overview" ||
+        (rawView === "backups" ||
+          rawView === "overview" ||
           rawView === "settings" ||
           rawView === "sql" ||
           rawView === "tables")
@@ -3701,7 +3719,7 @@ function ProjectBranches({
 interface BranchWorkspaceViewProps {
   branches: WorkspaceBranch[];
   selectedBranch: WorkspaceBranch | null;
-  view: "overview" | "settings" | "sql" | "tables";
+  view: "backups" | "overview" | "settings" | "sql" | "tables";
 }
 
 export function BranchWorkspaceView({
@@ -3737,6 +3755,8 @@ export function BranchWorkspaceView({
       );
     case "settings":
       return <BranchSettings selectedBranch={selectedBranch} />;
+    case "backups":
+      return <BranchBackupsView selectedBranch={selectedBranch} />;
     case "sql":
       return (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -3762,6 +3782,23 @@ export function BranchWorkspaceView({
       return exhaustive;
     }
   }
+}
+
+function BranchBackupsView({
+  selectedBranch,
+}: {
+  selectedBranch: WorkspaceBranch;
+}) {
+  const { organizationSlug } = useProjectWorkspaceOutlet();
+  return (
+    <BranchBackupsPanel
+      branchId={selectedBranch.branch.id}
+      branchName={selectedBranch.branch.name}
+      branches={selectedBranch.database.branches}
+      databaseId={selectedBranch.database.id}
+      organizationSlug={organizationSlug}
+    />
+  );
 }
 
 function BranchSettings({

@@ -363,6 +363,15 @@ export const backupJobs = pgTable(
     clusterId: text("cluster_id")
       .notNull()
       .references(() => databaseClusters.id, { onDelete: "cascade" }),
+    branchId: text("branch_id").references(() => branches.id, {
+      onDelete: "set null",
+    }),
+    s3DestinationId: text("s3_destination_id").references(
+      () => s3Destinations.id,
+      { onDelete: "set null" },
+    ),
+    scheduleId: text("schedule_id"),
+    pathPrefix: text("path_prefix"),
     status: jobStatus("status").notNull().default("queued"),
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
@@ -374,6 +383,48 @@ export const backupJobs = pgTable(
     clusterStatusIdx: index("backup_jobs_cluster_status_idx").on(
       table.clusterId,
       table.status,
+    ),
+    clusterBranchCreatedAtIdx: index(
+      "backup_jobs_cluster_branch_created_at_idx",
+    ).on(table.clusterId, table.branchId, table.createdAt),
+  }),
+);
+
+export const backupSchedules = pgTable(
+  "backup_schedules",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    clusterId: text("cluster_id")
+      .notNull()
+      .references(() => databaseClusters.id, { onDelete: "cascade" }),
+    branchId: text("branch_id")
+      .notNull()
+      .references(() => branches.id, { onDelete: "cascade" }),
+    s3DestinationId: text("s3_destination_id")
+      .notNull()
+      .references(() => s3Destinations.id, { onDelete: "restrict" }),
+    name: text("name").notNull(),
+    cronExpression: text("cron_expression").notNull(),
+    timezone: text("timezone").notNull().default("UTC"),
+    pathPrefix: text("path_prefix"),
+    retentionKeepLast: integer("retention_keep_last"),
+    enabled: boolean("enabled").notNull().default(true),
+    lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+    nextRunAt: timestamp("next_run_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => ({
+    clusterIdx: index("backup_schedules_cluster_idx").on(table.clusterId),
+    enabledNextRunIdx: index("backup_schedules_enabled_next_run_idx").on(
+      table.enabled,
+      table.nextRunAt,
+    ),
+    branchNameIdx: uniqueIndex("backup_schedules_branch_name_idx").on(
+      table.branchId,
+      table.name,
     ),
   }),
 );

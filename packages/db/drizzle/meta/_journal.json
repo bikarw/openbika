@@ -64,6 +64,20 @@
       "when": 1779047468338,
       "tag": "0009_busy_joseph",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1779051677679,
+      "tag": "0010_marvelous_ser_duncan",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1779053589097,
+      "tag": "0011_dark_goblin_queen",
+      "breakpoints": true
     }
   ]
 }

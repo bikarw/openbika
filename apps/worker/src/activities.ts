@@ -12,15 +12,21 @@ import { createId } from "@openbika/domain";
 import { parseEnv, workerEnvSchema } from "@openbika/env";
 import {
   type BackupArtifact,
+  type BackupS3Destination,
   type CloneBranchResult,
+  type CreateBackupContext,
   type DataPlaneProvider,
   LocalDataPlaneProvider,
+  parseBackupArtifactUri,
+  type PostgresContainerLookup,
+  type PostgresExecTarget,
   type ProvisionedCluster,
   type ProvisionedWorkload,
+  type RestoreBackupContext,
   type RestoreResult,
   type RotatedCredentials,
 } from "@openbika/provisioning";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, notInArray } from "drizzle-orm";
 
 const provider: DataPlaneProvider = new LocalDataPlaneProvider();
 const env = parseEnv(workerEnvSchema);
@@ -713,6 +719,155 @@ export async function cloneBranchActivity(
   }
 }
 
+async function loadBackupContext(input: CreateBackupInput): Promise<{
+  branchDatabaseName: string | null;
+  branchId: string | null;
+  destination: BackupS3Destination | null;
+  pathPrefix: string | null;
+  postgresExec: PostgresExecTarget | null;
+  scheduleId: string | null;
+}> {
+  const job = (
+    await db
+      .select()
+      .from(schema.backupJobs)
+      .where(eq(schema.backupJobs.id, input.backupJobId))
+      .limit(1)
+  )[0];
+
+  if (!job) {
+    return {
+      branchDatabaseName: null,
+      branchId: null,
+      destination: null,
+      pathPrefix: null,
+      postgresExec: null,
+      scheduleId: null,
+    };
+  }
+
+  const branchId = job.branchId ?? input.branchId ?? null;
+  const destinationId = job.s3DestinationId ?? input.s3DestinationId ?? null;
+  const pathPrefix = job.pathPrefix ?? input.pathPrefix ?? null;
+
+  let branchDatabaseName: string | null = null;
+  let postgresExec: PostgresExecTarget | null = null;
+  if (branchId) {
+    try {
+      branchDatabaseName = await resolveLocalBranchDatabaseName(branchId);
+      postgresExec = buildPostgresExecTarget(branchId);
+    } catch {
+      branchDatabaseName = null;
+      postgresExec = null;
+    }
+  }
+
+  let destination: BackupS3Destination | null = null;
+  if (destinationId) {
+    const row = (
+      await db
+        .select()
+        .from(schema.s3Destinations)
+        .where(eq(schema.s3Destinations.id, destinationId))
+        .limit(1)
+    )[0];
+
+    if (row) {
+      destination = {
+        accessKey: row.accessKey,
+        additionalFlags: row.additionalFlags,
+        bucket: row.bucket,
+        endpoint: row.endpoint,
+        region: row.region,
+        secretAccessKey: row.secretAccessKey,
+      };
+    }
+  }
+
+  return {
+    branchDatabaseName,
+    branchId,
+    destination,
+    pathPrefix,
+    postgresExec,
+    scheduleId: job.scheduleId,
+  };
+}
+
+/**
+ * Locate the running Postgres container we should `docker exec` into for
+ * `pg_dump`. By default we use the compose service label so it works with
+ * the bundled `infra/docker/docker-compose.yml`. Operators can override via
+ * `OPENBIKA_POSTGRES_CONTAINER` when they manage Postgres themselves.
+ */
+function resolvePostgresContainerLookup(): PostgresContainerLookup {
+  const override = process.env.OPENBIKA_POSTGRES_CONTAINER;
+  if (override && override.trim().length > 0) {
+    return { kind: "name", value: override.trim() };
+  }
+
+  const labelKey =
+    process.env.OPENBIKA_POSTGRES_CONTAINER_LABEL_KEY ??
+    "com.docker.compose.service";
+  const labelValue =
+    process.env.OPENBIKA_POSTGRES_CONTAINER_LABEL_VALUE ?? "postgres";
+  return { kind: "label", key: labelKey, value: labelValue };
+}
+
+function buildPostgresExecTarget(branchId: string): PostgresExecTarget {
+  const credentials = localBranchCredentials(branchId);
+  return {
+    containerLookup: resolvePostgresContainerLookup(),
+    database: credentials.databaseName,
+    password: credentials.password,
+    username: credentials.username,
+  };
+}
+
+/**
+ * Apply a schedule's `retentionKeepLast` policy by deleting succeeded jobs
+ * older than the most recent N. Failed/queued/running jobs are left untouched
+ * so operators can inspect them.
+ */
+async function applyScheduleRetention(scheduleId: string) {
+  const schedule = (
+    await db
+      .select()
+      .from(schema.backupSchedules)
+      .where(eq(schema.backupSchedules.id, scheduleId))
+      .limit(1)
+  )[0];
+
+  if (!schedule || schedule.retentionKeepLast === null) return;
+  const keep = schedule.retentionKeepLast;
+  if (keep < 1) return;
+
+  const survivors = await db
+    .select({ id: schema.backupJobs.id })
+    .from(schema.backupJobs)
+    .where(
+      and(
+        eq(schema.backupJobs.scheduleId, scheduleId),
+        eq(schema.backupJobs.status, "succeeded"),
+      ),
+    )
+    .orderBy(desc(schema.backupJobs.createdAt))
+    .limit(keep);
+
+  const keepIds = survivors.map((row) => row.id);
+  if (keepIds.length === 0) return;
+
+  await db
+    .delete(schema.backupJobs)
+    .where(
+      and(
+        eq(schema.backupJobs.scheduleId, scheduleId),
+        eq(schema.backupJobs.status, "succeeded"),
+        notInArray(schema.backupJobs.id, keepIds),
+      ),
+    );
+}
+
 export async function createBackupActivity(
   input: CreateBackupInput,
 ): Promise<BackupArtifact> {
@@ -731,7 +886,15 @@ export async function createBackupActivity(
     .where(eq(schema.backupJobs.id, input.backupJobId));
 
   try {
-    const result = await provider.createBackup(input);
+    const loaded = await loadBackupContext(input);
+    const context: CreateBackupContext = {
+      branchDatabaseName: loaded.branchDatabaseName,
+      branchId: loaded.branchId,
+      destination: loaded.destination,
+      pathPrefix: loaded.pathPrefix,
+      postgresExec: loaded.postgresExec,
+    };
+    const result = await provider.createBackup(input, context);
 
     await db
       .update(schema.backupJobs)
@@ -742,6 +905,20 @@ export async function createBackupActivity(
         updatedAt: new Date(),
       })
       .where(eq(schema.backupJobs.id, input.backupJobId));
+
+    if (loaded.scheduleId) {
+      try {
+        await applyScheduleRetention(loaded.scheduleId);
+      } catch (retentionError) {
+        Context.current().log.warn("Backup retention pruning failed", {
+          error:
+            retentionError instanceof Error
+              ? retentionError.message
+              : "Unknown error",
+          scheduleId: loaded.scheduleId,
+        });
+      }
+    }
 
     return result;
   } catch (error) {
@@ -759,12 +936,115 @@ export async function createBackupActivity(
   }
 }
 
+/**
+ * Reset the target branch's local Postgres database before restoring. For
+ * existing branches we drop and recreate the database (the simplest way to
+ * guarantee a clean canvas for `pg_restore`); for new branches we just make
+ * sure the database/role exist.
+ */
+async function prepareTargetDatabaseForRestore(branchId: string) {
+  const credentials = localBranchCredentials(branchId);
+  await terminateLocalDatabaseConnections(credentials.databaseName);
+  const pool = createPool(env.DATABASE_URL);
+  const client = await pool.connect();
+  try {
+    const roleExists = await client.query<{ exists: boolean }>(
+      "select exists(select 1 from pg_roles where rolname = $1)",
+      [credentials.username],
+    );
+    if (!roleExists.rows[0]?.exists) {
+      await client.query(
+        `create role ${quoteIdentifier(credentials.username)} login password ${quoteLiteral(credentials.password)}`,
+      );
+    } else {
+      await client.query(
+        `alter role ${quoteIdentifier(credentials.username)} login password ${quoteLiteral(credentials.password)}`,
+      );
+    }
+
+    await client.query(
+      `drop database if exists ${quoteIdentifier(credentials.databaseName)}`,
+    );
+    await client.query(
+      `create database ${quoteIdentifier(credentials.databaseName)} owner ${quoteIdentifier(credentials.username)}`,
+    );
+  } finally {
+    client.release();
+    await pool.end();
+  }
+}
+
+async function loadRestoreContext(
+  input: RestoreBackupInput,
+): Promise<RestoreBackupContext> {
+  const backupJob = (
+    await db
+      .select()
+      .from(schema.backupJobs)
+      .where(eq(schema.backupJobs.id, input.backupJobId))
+      .limit(1)
+  )[0];
+
+  if (!backupJob) {
+    throw new Error(
+      `Backup job not found: ${input.backupJobId}. Cannot restore.`,
+    );
+  }
+  if (backupJob.status !== "succeeded" || !backupJob.artifactUri) {
+    throw new Error(
+      `Backup job ${input.backupJobId} has no successful artifact to restore (status=${backupJob.status}).`,
+    );
+  }
+
+  const source = parseBackupArtifactUri(backupJob.artifactUri);
+  if (!source) {
+    throw new Error(
+      `Cannot restore: artifact URI is not an S3 object (${backupJob.artifactUri}). Local placeholders cannot be restored.`,
+    );
+  }
+
+  let destination: BackupS3Destination | null = null;
+  if (backupJob.s3DestinationId) {
+    const row = (
+      await db
+        .select()
+        .from(schema.s3Destinations)
+        .where(eq(schema.s3Destinations.id, backupJob.s3DestinationId))
+        .limit(1)
+    )[0];
+    if (row) {
+      destination = {
+        accessKey: row.accessKey,
+        additionalFlags: row.additionalFlags,
+        bucket: row.bucket,
+        endpoint: row.endpoint,
+        region: row.region,
+        secretAccessKey: row.secretAccessKey,
+      };
+    }
+  }
+
+  if (!destination) {
+    throw new Error(
+      "Cannot restore: the S3 destination this backup was uploaded to is no longer configured.",
+    );
+  }
+
+  return {
+    destination,
+    postgresExec: buildPostgresExecTarget(input.targetBranchId),
+    source,
+  };
+}
+
 export async function restoreBackupActivity(
   input: RestoreBackupInput,
 ): Promise<RestoreResult> {
   Context.current().log.info("Restoring cluster backup", {
     backupJobId: input.backupJobId,
+    mode: input.mode,
     restoreJobId: input.restoreJobId,
+    targetBranchId: input.targetBranchId,
   });
 
   await db
@@ -777,7 +1057,9 @@ export async function restoreBackupActivity(
     .where(eq(schema.restoreJobs.id, input.restoreJobId));
 
   try {
-    const result = await provider.restoreBackup(input);
+    await prepareTargetDatabaseForRestore(input.targetBranchId);
+    const context = await loadRestoreContext(input);
+    const result = await provider.restoreBackup(input, context);
 
     await db.transaction(async (tx) => {
       await tx

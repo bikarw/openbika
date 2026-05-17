@@ -1,7 +1,11 @@
 import {
+  type BackupJobResponse,
+  type BackupScheduleResponse,
   branchConnectionResponseSchema,
   branchQueryResponseSchema,
   branchSchemaResponseSchema,
+  createBackupRequestSchema,
+  createBackupScheduleRequestSchema,
   createBranchRequestSchema,
   createDatabaseRequestSchema,
   createOrganizationRequestSchema,
@@ -14,6 +18,7 @@ import {
   normalizeIngressFreeDnsZone,
   normalizeServerDomainHost,
   parseIngressEmbeddedPublicIpv4,
+  patchBackupScheduleRequestSchema,
   patchBranchSettingsRequestSchema,
   patchS3DestinationRequestSchema,
   patchServerDomainSettingsRequestSchema,
@@ -505,6 +510,38 @@ async function deleteExpiredBranchesForDatabase({
         lte(schema.branches.expiresAt, new Date()),
       ),
     );
+}
+
+async function assertDestinationBelongsToOrg({
+  destinationId,
+  db,
+  organizationId,
+}: {
+  destinationId: string;
+  db: ControlPlaneDb;
+  organizationId: string;
+}) {
+  const destination = first(
+    await db
+      .select()
+      .from(schema.s3Destinations)
+      .where(eq(schema.s3Destinations.id, destinationId))
+      .limit(1),
+  );
+
+  if (!destination) {
+    throw new HTTPException(404, {
+      message: "Destination not found",
+    });
+  }
+
+  if (destination.organizationId !== organizationId) {
+    throw new HTTPException(403, {
+      message: "Destination belongs to a different organization",
+    });
+  }
+
+  return destination;
 }
 
 async function assertBranchAccess({
@@ -1133,6 +1170,48 @@ function serializeBranch(branch: SerializableBranch): BranchResponse {
     name: branch.name,
     parentBranchId: branch.parentBranchId,
     status: branch.status,
+  };
+}
+
+function serializeBackupJob(
+  row: typeof schema.backupJobs.$inferSelect,
+): BackupJobResponse {
+  return {
+    artifactUri: row.artifactUri,
+    branchId: row.branchId,
+    createdAt: row.createdAt.toISOString(),
+    databaseId: row.clusterId,
+    errorMessage: row.errorMessage,
+    finishedAt: serializeNullableDate(row.finishedAt),
+    id: row.id,
+    pathPrefix: row.pathPrefix,
+    s3DestinationId: row.s3DestinationId,
+    scheduleId: row.scheduleId,
+    startedAt: serializeNullableDate(row.startedAt),
+    status: row.status,
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+function serializeBackupSchedule(
+  row: typeof schema.backupSchedules.$inferSelect,
+): BackupScheduleResponse {
+  return {
+    branchId: row.branchId,
+    createdAt: row.createdAt.toISOString(),
+    cronExpression: row.cronExpression,
+    databaseId: row.clusterId,
+    enabled: row.enabled,
+    id: row.id,
+    lastRunAt: serializeNullableDate(row.lastRunAt),
+    name: row.name,
+    nextRunAt: serializeNullableDate(row.nextRunAt),
+    organizationId: row.organizationId,
+    pathPrefix: row.pathPrefix,
+    retentionKeepLast: row.retentionKeepLast,
+    s3DestinationId: row.s3DestinationId,
+    timezone: row.timezone,
+    updatedAt: row.updatedAt.toISOString(),
   };
 }
 
@@ -2678,7 +2757,7 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
     );
   });
 
-  routes.post("/databases/:databaseId/backups", async (c) => {
+  routes.get("/databases/:databaseId/backups", async (c) => {
     const user = requireUser(c);
     const db = c.get("db");
     const database = await assertDatabaseAccess({
@@ -2686,23 +2765,119 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       db,
       userId: user.id,
     });
+    const branchIdFilter = c.req.query("branchId");
+
+    const filters = [eq(schema.backupJobs.clusterId, database.id)];
+    if (branchIdFilter) {
+      filters.push(eq(schema.backupJobs.branchId, branchIdFilter));
+    }
+
+    const rows = await db
+      .select()
+      .from(schema.backupJobs)
+      .where(filters.length === 1 ? filters[0] : and(...filters))
+      .orderBy(desc(schema.backupJobs.createdAt));
+
+    return c.json({
+      backupJobs: rows.map(serializeBackupJob),
+    });
+  });
+
+  routes.post("/databases/:databaseId/backups", async (c) => {
+    const user = requireUser(c);
+    const input = await parseJson(c, createBackupRequestSchema);
+    const db = c.get("db");
+    const database = await assertDatabaseAccess({
+      databaseId: c.req.param("databaseId"),
+      db,
+      userId: user.id,
+    });
+    const project = first(
+      await db
+        .select()
+        .from(schema.projects)
+        .where(eq(schema.projects.id, database.projectId))
+        .limit(1),
+    );
+
+    if (!project) {
+      throw new HTTPException(404, {
+        message: "Project not found for database",
+      });
+    }
+
+    let branchId: string | null = null;
+    if (input.branchId) {
+      const branch = first(
+        await db
+          .select()
+          .from(schema.branches)
+          .where(eq(schema.branches.id, input.branchId))
+          .limit(1),
+      );
+
+      if (!branch) {
+        throw new HTTPException(404, {
+          message: "Branch not found",
+        });
+      }
+
+      if (branch.clusterId !== database.id) {
+        throw new HTTPException(400, {
+          message: "Branch must belong to the same database",
+        });
+      }
+
+      branchId = branch.id;
+    }
+
+    let s3DestinationId: string | null = null;
+    if (input.s3DestinationId) {
+      const destination = await assertDestinationBelongsToOrg({
+        db,
+        destinationId: input.s3DestinationId,
+        organizationId: project.organizationId,
+      });
+      s3DestinationId = destination.id;
+    }
+
+    const pathPrefix =
+      input.pathPrefix !== undefined && input.pathPrefix.trim().length > 0
+        ? input.pathPrefix.trim()
+        : null;
+
     const backup = {
+      branchId,
       clusterId: database.id,
       id: createId("backup_job"),
+      pathPrefix,
+      s3DestinationId,
+      scheduleId: null as string | null,
       status: "queued" as const,
     };
 
-    await db.insert(schema.backupJobs).values(backup);
+    const inserted = first(
+      await db.insert(schema.backupJobs).values(backup).returning(),
+    );
+
+    if (!inserted) {
+      throw new HTTPException(500, {
+        message: "Could not create backup job",
+      });
+    }
 
     try {
       await startControlPlaneWorkflow({
         env,
         name: workflowNames.createBackup,
         payload: {
-          backupJobId: backup.id,
+          backupJobId: inserted.id,
+          branchId: inserted.branchId,
           clusterId: database.id,
+          pathPrefix: inserted.pathPrefix,
+          s3DestinationId: inserted.s3DestinationId,
         },
-        workflowId: `backup-${backup.id}`,
+        workflowId: `backup-${inserted.id}`,
       });
     } catch (error) {
       if (error instanceof WorkflowDispatchError) {
@@ -2717,15 +2892,7 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
 
     return c.json(
       {
-        backupJob: {
-          artifactUri: null,
-          databaseId: backup.clusterId,
-          errorMessage: null,
-          finishedAt: null,
-          id: backup.id,
-          startedAt: null,
-          status: backup.status,
-        },
+        backupJob: serializeBackupJob(inserted),
       },
       202,
     );
@@ -2754,23 +2921,64 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       db,
       userId: user.id,
     });
-    const branch = {
-      clusterId: database.id,
-      copyMode: "schema_and_data" as const,
-      expiresAt: null,
-      id: createId("branch"),
-      name: input.targetBranchName,
-      status: "creating" as const,
-    };
+
+    let targetBranchId: string;
+    let createdBranch:
+      | (typeof schema.branches.$inferInsert & { id: string })
+      | null = null;
+
+    if (input.mode === "overwrite_existing") {
+      if (!input.targetBranchId) {
+        throw new HTTPException(400, {
+          message: "targetBranchId is required when mode is overwrite_existing",
+        });
+      }
+      const existing = first(
+        await db
+          .select()
+          .from(schema.branches)
+          .where(eq(schema.branches.id, input.targetBranchId))
+          .limit(1),
+      );
+      if (!existing || existing.clusterId !== database.id) {
+        throw new HTTPException(404, {
+          message: "Target branch not found in this database",
+        });
+      }
+      targetBranchId = existing.id;
+    } else {
+      if (!input.targetBranchName) {
+        throw new HTTPException(400, {
+          message: "targetBranchName is required when mode is new_branch",
+        });
+      }
+      createdBranch = {
+        clusterId: database.id,
+        copyMode: "schema_and_data" as const,
+        expiresAt: null,
+        id: createId("branch"),
+        name: input.targetBranchName,
+        status: "creating" as const,
+      };
+      targetBranchId = createdBranch.id;
+    }
+
     const restore = {
       backupJobId: backup.id,
       id: createId("restore_job"),
       status: "queued" as const,
-      targetBranchId: branch.id,
+      targetBranchId,
     };
 
     await db.transaction(async (tx) => {
-      await tx.insert(schema.branches).values(branch);
+      if (createdBranch) {
+        await tx.insert(schema.branches).values(createdBranch);
+      } else {
+        await tx
+          .update(schema.branches)
+          .set({ status: "creating", updatedAt: new Date() })
+          .where(eq(schema.branches.id, targetBranchId));
+      }
       await tx.insert(schema.restoreJobs).values(restore);
     });
 
@@ -2780,8 +2988,9 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
         name: workflowNames.restoreBackup,
         payload: {
           backupJobId: backup.id,
+          mode: input.mode,
           restoreJobId: restore.id,
-          targetBranchId: branch.id,
+          targetBranchId,
         },
         workflowId: `restore-${restore.id}`,
       });
@@ -2836,16 +3045,235 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
     });
 
     return c.json({
-      backupJob: {
-        artifactUri: backup.artifactUri,
-        databaseId: backup.clusterId,
-        errorMessage: backup.errorMessage,
-        finishedAt: serializeNullableDate(backup.finishedAt),
-        id: backup.id,
-        startedAt: serializeNullableDate(backup.startedAt),
-        status: backup.status,
-      },
+      backupJob: serializeBackupJob(backup),
     });
+  });
+
+  routes.get("/databases/:databaseId/backup-schedules", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const database = await assertDatabaseAccess({
+      databaseId: c.req.param("databaseId"),
+      db,
+      userId: user.id,
+    });
+    const branchIdFilter = c.req.query("branchId");
+
+    const filters = [eq(schema.backupSchedules.clusterId, database.id)];
+    if (branchIdFilter) {
+      filters.push(eq(schema.backupSchedules.branchId, branchIdFilter));
+    }
+
+    const rows = await db
+      .select()
+      .from(schema.backupSchedules)
+      .where(filters.length === 1 ? filters[0] : and(...filters))
+      .orderBy(desc(schema.backupSchedules.createdAt));
+
+    return c.json({
+      schedules: rows.map(serializeBackupSchedule),
+    });
+  });
+
+  routes.post("/databases/:databaseId/backup-schedules", async (c) => {
+    const user = requireUser(c);
+    const input = await parseJson(c, createBackupScheduleRequestSchema);
+    const db = c.get("db");
+    const database = await assertDatabaseAccess({
+      databaseId: c.req.param("databaseId"),
+      db,
+      userId: user.id,
+    });
+    const project = first(
+      await db
+        .select()
+        .from(schema.projects)
+        .where(eq(schema.projects.id, database.projectId))
+        .limit(1),
+    );
+
+    if (!project) {
+      throw new HTTPException(404, {
+        message: "Project not found for database",
+      });
+    }
+
+    const branch = first(
+      await db
+        .select()
+        .from(schema.branches)
+        .where(eq(schema.branches.id, input.branchId))
+        .limit(1),
+    );
+
+    if (!branch) {
+      throw new HTTPException(404, {
+        message: "Branch not found",
+      });
+    }
+
+    if (branch.clusterId !== database.id) {
+      throw new HTTPException(400, {
+        message: "Branch must belong to the same database",
+      });
+    }
+
+    await assertDestinationBelongsToOrg({
+      db,
+      destinationId: input.s3DestinationId,
+      organizationId: project.organizationId,
+    });
+
+    const pathPrefix =
+      input.pathPrefix !== undefined && input.pathPrefix.trim().length > 0
+        ? input.pathPrefix.trim()
+        : null;
+
+    const inserted = first(
+      await db
+        .insert(schema.backupSchedules)
+        .values({
+          branchId: branch.id,
+          clusterId: database.id,
+          cronExpression: input.cronExpression,
+          enabled: input.enabled,
+          id: createId("backup_schedule"),
+          name: input.name,
+          organizationId: project.organizationId,
+          pathPrefix,
+          retentionKeepLast: input.retentionKeepLast ?? null,
+          s3DestinationId: input.s3DestinationId,
+          timezone: input.timezone,
+        })
+        .returning(),
+    );
+
+    if (!inserted) {
+      throw new HTTPException(500, {
+        message: "Could not create backup schedule",
+      });
+    }
+
+    return c.json(
+      {
+        schedule: serializeBackupSchedule(inserted),
+      },
+      201,
+    );
+  });
+
+  routes.patch("/backup-schedules/:scheduleId", async (c) => {
+    const user = requireUser(c);
+    const scheduleId = c.req.param("scheduleId");
+    const input = await parseJson(c, patchBackupScheduleRequestSchema);
+    const db = c.get("db");
+
+    const existing = first(
+      await db
+        .select()
+        .from(schema.backupSchedules)
+        .where(eq(schema.backupSchedules.id, scheduleId))
+        .limit(1),
+    );
+
+    if (!existing) {
+      throw new HTTPException(404, {
+        message: "Schedule not found",
+      });
+    }
+
+    await assertDatabaseAccess({
+      databaseId: existing.clusterId,
+      db,
+      userId: user.id,
+    });
+
+    if (input.s3DestinationId !== undefined) {
+      await assertDestinationBelongsToOrg({
+        db,
+        destinationId: input.s3DestinationId,
+        organizationId: existing.organizationId,
+      });
+    }
+
+    const patch: Partial<typeof schema.backupSchedules.$inferInsert> = {
+      updatedAt: new Date(),
+    };
+
+    if (input.name !== undefined) {
+      patch.name = input.name;
+    }
+    if (input.cronExpression !== undefined) {
+      patch.cronExpression = input.cronExpression;
+    }
+    if (input.timezone !== undefined) {
+      patch.timezone = input.timezone;
+    }
+    if (input.enabled !== undefined) {
+      patch.enabled = input.enabled;
+    }
+    if (input.s3DestinationId !== undefined) {
+      patch.s3DestinationId = input.s3DestinationId;
+    }
+    if (input.pathPrefix !== undefined) {
+      patch.pathPrefix =
+        input.pathPrefix === null || input.pathPrefix.trim().length === 0
+          ? null
+          : input.pathPrefix.trim();
+    }
+    if (input.retentionKeepLast !== undefined) {
+      patch.retentionKeepLast = input.retentionKeepLast;
+    }
+
+    const saved = first(
+      await db
+        .update(schema.backupSchedules)
+        .set(patch)
+        .where(eq(schema.backupSchedules.id, scheduleId))
+        .returning(),
+    );
+
+    if (!saved) {
+      throw new HTTPException(500, {
+        message: "Could not update schedule",
+      });
+    }
+
+    return c.json({
+      schedule: serializeBackupSchedule(saved),
+    });
+  });
+
+  routes.delete("/backup-schedules/:scheduleId", async (c) => {
+    const user = requireUser(c);
+    const scheduleId = c.req.param("scheduleId");
+    const db = c.get("db");
+
+    const existing = first(
+      await db
+        .select()
+        .from(schema.backupSchedules)
+        .where(eq(schema.backupSchedules.id, scheduleId))
+        .limit(1),
+    );
+
+    if (!existing) {
+      throw new HTTPException(404, {
+        message: "Schedule not found",
+      });
+    }
+
+    await assertDatabaseAccess({
+      databaseId: existing.clusterId,
+      db,
+      userId: user.id,
+    });
+
+    await db
+      .delete(schema.backupSchedules)
+      .where(eq(schema.backupSchedules.id, scheduleId));
+
+    return c.body(null, 204);
   });
 
   return routes;

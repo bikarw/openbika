@@ -23,6 +23,7 @@
     "@openbika/queue": "workspace:*",
     "@sindresorhus/slugify": "^3.0.0",
     "@temporalio/client": "^1.17.0",
+    "cron-parser": "^5.5.0",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.16",
     "zod": "^4.4.1"

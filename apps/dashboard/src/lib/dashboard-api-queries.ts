@@ -1,8 +1,12 @@
 import type {
+  CreateBackupRequest,
+  CreateBackupScheduleRequest,
   CreateBranchRequest,
   CreateDatabaseRequest,
   CreateProjectRequest,
+  CreateRestoreRequest,
   CreateWorkloadRequest,
+  PatchBackupScheduleRequest,
   PatchBranchSettingsRequest,
   PatchServerDomainSettingsRequest,
   PatchWorkloadEnvRequest,
@@ -38,6 +42,20 @@ export const dashboardKeys = {
     [...dashboardKeys.root, "branch-connection", branchId] as const,
   workloadRuntimeLogs: (workloadId: string, tail: number) =>
     [...dashboardKeys.root, "workload-runtime-logs", workloadId, tail] as const,
+  databaseBackups: (databaseId: string, branchId?: string) =>
+    [
+      ...dashboardKeys.root,
+      "database-backups",
+      databaseId,
+      branchId ?? "all",
+    ] as const,
+  backupSchedules: (databaseId: string, branchId?: string) =>
+    [
+      ...dashboardKeys.root,
+      "backup-schedules",
+      databaseId,
+      branchId ?? "all",
+    ] as const,
 };
 
 export async function fetchOrganizations() {
@@ -161,6 +179,58 @@ export async function executeBranchSql(
   input: { readOnly: boolean; sql: string },
 ) {
   return getDashboardApiClient().executeBranchQuery(branchId, input);
+}
+
+export async function fetchDatabaseBackups(
+  databaseId: string,
+  branchId?: string,
+) {
+  return getDashboardApiClient().listDatabaseBackups(
+    databaseId,
+    branchId ? { branchId } : {},
+  );
+}
+
+export async function createDatabaseBackupRequest(
+  databaseId: string,
+  input: CreateBackupRequest,
+) {
+  return getDashboardApiClient().createBackup(databaseId, input);
+}
+
+export async function createRestoreRequest(
+  backupJobId: string,
+  input: CreateRestoreRequest,
+) {
+  return getDashboardApiClient().createRestore(backupJobId, input);
+}
+
+export async function fetchBackupSchedules(
+  databaseId: string,
+  branchId?: string,
+) {
+  return getDashboardApiClient().listBackupSchedules(
+    databaseId,
+    branchId ? { branchId } : {},
+  );
+}
+
+export async function createBackupScheduleRequest(
+  databaseId: string,
+  input: CreateBackupScheduleRequest,
+) {
+  return getDashboardApiClient().createBackupSchedule(databaseId, input);
+}
+
+export async function patchBackupScheduleRequest(
+  scheduleId: string,
+  input: PatchBackupScheduleRequest,
+) {
+  return getDashboardApiClient().patchBackupSchedule(scheduleId, input);
+}
+
+export async function deleteBackupScheduleRequest(scheduleId: string) {
+  return getDashboardApiClient().deleteBackupSchedule(scheduleId);
 }
 
 /** Resolve database id for a branch; uses TanStack Query cache when primed. */
