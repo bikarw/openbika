@@ -1,6 +1,6 @@
 import type * as React from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { Boxes, HardDrive, LogOut, Settings } from 'lucide-react'
+import { Boxes, GitBranch, HardDrive, LogOut, Settings } from 'lucide-react'
 
 import { Badge } from '@openbika/ui/components/badge'
 import { Button } from '@openbika/ui/components/button'
@@ -20,7 +20,7 @@ import {
 } from '@openbika/ui/components/sidebar'
 
 export interface DashboardShellProps {
-  activeNav?: 'destinations' | 'projects' | 'settings'
+  activeNav?: 'destinations' | 'git' | 'projects' | 'settings'
   children: React.ReactNode
   headerStatus?: 'error' | 'loading' | 'ok' | null
   onSignOut: () => void
@@ -40,14 +40,16 @@ export function DashboardShell({
 }: DashboardShellProps) {
   const navigate = useNavigate()
 
-  function navigateTo(path: 'destinations' | 'projects' | 'settings') {
+  function navigateTo(path: 'destinations' | 'git' | 'projects' | 'settings') {
     if (!organizationSlug) return
     const target =
       path === 'projects'
         ? '/$organizationSlug/projects'
         : path === 'settings'
           ? '/$organizationSlug/settings'
-          : '/$organizationSlug/destinations'
+          : path === 'git'
+            ? '/$organizationSlug/git'
+            : '/$organizationSlug/destinations'
     void navigate({
       params: { organizationSlug },
       to: target,
@@ -100,6 +102,15 @@ export function DashboardShell({
                   >
                     <HardDrive className="size-4" />
                     Destinations
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    isActive={activeNav === 'git'}
+                    onClick={() => navigateTo('git')}
+                  >
+                    <GitBranch className="size-4" />
+                    Git
                   </SidebarMenuButton>
                 </SidebarMenuItem>
                 <SidebarMenuItem>

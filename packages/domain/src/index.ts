@@ -19,14 +19,24 @@ export type EntityPrefix =
   | "rst"
   | "wss"
   | "wkl"
-  | "s3d";
+  | "s3d"
+  | "gp"
+  | "ghp"
+  | "glp"
+  | "bbp"
+  | "gtp";
 
 const prefixMap = {
   backup_job: "bkp",
   backup_schedule: "bks",
+  bitbucket_provider: "bbp",
   branch: "br",
   database_cluster: "db",
   endpoint: "ep",
+  git_provider: "gp",
+  gitea_provider: "gtp",
+  github_provider: "ghp",
+  gitlab_provider: "glp",
   membership: "mem",
   organization: "org",
   project: "prj",

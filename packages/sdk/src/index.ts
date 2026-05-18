@@ -13,8 +13,14 @@ import {
   branchResponseSchema,
   type CreateBackupRequest,
   type CreateBackupScheduleRequest,
+  type CreateBitbucketProviderRequest,
   type CreateBranchRequest,
   type CreateDatabaseRequest,
+  type CreateGiteaProviderRequest,
+  type CreateGitlabProviderRequest,
+  type PrepareGithubManifestRequest,
+  type PrepareGithubManifestResponse,
+  prepareGithubManifestResponseSchema,
   type CreateOrganizationRequest,
   type CreateProjectRequest,
   type CreateRestoreRequest,
@@ -23,12 +29,22 @@ import {
   type DatabaseResponse,
   databaseResponseSchema,
   type ExecuteBranchQueryRequest,
+  type GitBranchListResponse,
+  gitBranchListResponseSchema,
+  type GitProviderResponse,
+  gitProviderResponseSchema,
+  type GitRepositoryListResponse,
+  gitRepositoryListResponseSchema,
   type HealthResponse,
   healthResponseSchema,
   type OrganizationResponse,
   organizationResponseSchema,
   type PatchBackupScheduleRequest,
+  type PatchBitbucketProviderRequest,
   type PatchBranchSettingsRequest,
+  type PatchGiteaProviderRequest,
+  type PatchGithubProviderRequest,
+  type PatchGitlabProviderRequest,
   type PatchS3DestinationRequest,
   type ProjectResponse,
   type PatchWorkloadEnvRequest,
@@ -37,12 +53,15 @@ import {
   projectResponseSchema,
   type ProjectSummaryResponse,
   projectSummaryResponseSchema,
+  type RenameGitProviderRequest,
   type RestoreJobResponse,
   restoreJobResponseSchema,
   type S3DestinationResponse,
   s3DestinationResponseSchema,
   type ServerDomainSettingsResponse,
   serverDomainSettingsResponseSchema,
+  type TestGitConnectionResponse,
+  testGitConnectionResponseSchema,
   type WorkloadResponse,
   workloadResponseSchema,
   type WorkloadRuntimeLogsResponse,
@@ -235,6 +254,305 @@ export class OpenbikaClient {
       parse: () => undefined,
       path: `/v1/s3-destinations/${encodeURIComponent(destinationId)}`,
     });
+  }
+
+  // --- Git providers -------------------------------------------------------
+
+  async listGitProviders(
+    organizationId: string,
+  ): Promise<GitProviderResponse[]> {
+    const search = new URLSearchParams({ organizationId });
+    return this.request({
+      parse: (body) =>
+        gitProviderResponseSchema
+          .array()
+          .parse(readProperty(body, "providers")),
+      path: `/v1/git-providers?${search.toString()}`,
+    });
+  }
+
+  async renameGitProvider(
+    gitProviderId: string,
+    input: RenameGitProviderRequest,
+  ): Promise<GitProviderResponse> {
+    return this.request({
+      body: input,
+      method: "PATCH",
+      parse: (body) =>
+        gitProviderResponseSchema.parse(readProperty(body, "provider")),
+      path: `/v1/git-providers/${encodeURIComponent(gitProviderId)}`,
+    });
+  }
+
+  async deleteGitProvider(gitProviderId: string): Promise<void> {
+    await this.request({
+      method: "DELETE",
+      parse: () => undefined,
+      path: `/v1/git-providers/${encodeURIComponent(gitProviderId)}`,
+    });
+  }
+
+  // GitHub
+  /**
+   * Build the GitHub App manifest + the `actionUrl` the browser should POST to.
+   * No DB row is created here; the row is inserted when GitHub redirects back
+   * to /v1/providers/github/setup with the code.
+   */
+  async prepareGithubManifest(
+    input: PrepareGithubManifestRequest,
+  ): Promise<PrepareGithubManifestResponse> {
+    return this.request({
+      body: input,
+      method: "POST",
+      parse: (body) => prepareGithubManifestResponseSchema.parse(body),
+      path: "/v1/git-providers/github/prepare-manifest",
+    });
+  }
+
+  async patchGithubProvider(
+    gitProviderId: string,
+    input: PatchGithubProviderRequest,
+  ): Promise<GitProviderResponse> {
+    return this.request({
+      body: input,
+      method: "PATCH",
+      parse: (body) =>
+        gitProviderResponseSchema.parse(readProperty(body, "provider")),
+      path: `/v1/git-providers/github/${encodeURIComponent(gitProviderId)}`,
+    });
+  }
+
+  async testGithubProvider(
+    gitProviderId: string,
+  ): Promise<TestGitConnectionResponse> {
+    return this.request({
+      method: "POST",
+      parse: (body) => testGitConnectionResponseSchema.parse(body),
+      path: `/v1/git-providers/github/${encodeURIComponent(gitProviderId)}/test`,
+    });
+  }
+
+  async listGithubRepositories(
+    gitProviderId: string,
+  ): Promise<GitRepositoryListResponse> {
+    return this.request({
+      parse: (body) =>
+        gitRepositoryListResponseSchema.parse(
+          readProperty(body, "repositories"),
+        ),
+      path: `/v1/git-providers/github/${encodeURIComponent(gitProviderId)}/repositories`,
+    });
+  }
+
+  async listGithubBranches(
+    gitProviderId: string,
+    owner: string,
+    repo: string,
+  ): Promise<GitBranchListResponse> {
+    const search = new URLSearchParams({ owner, repo });
+    return this.request({
+      parse: (body) =>
+        gitBranchListResponseSchema.parse(readProperty(body, "branches")),
+      path: `/v1/git-providers/github/${encodeURIComponent(gitProviderId)}/branches?${search.toString()}`,
+    });
+  }
+
+  // GitLab
+  async createGitlabProvider(
+    input: CreateGitlabProviderRequest,
+  ): Promise<GitProviderResponse> {
+    return this.request({
+      body: input,
+      method: "POST",
+      parse: (body) =>
+        gitProviderResponseSchema.parse(readProperty(body, "provider")),
+      path: "/v1/git-providers/gitlab",
+    });
+  }
+
+  async patchGitlabProvider(
+    gitProviderId: string,
+    input: PatchGitlabProviderRequest,
+  ): Promise<GitProviderResponse> {
+    return this.request({
+      body: input,
+      method: "PATCH",
+      parse: (body) =>
+        gitProviderResponseSchema.parse(readProperty(body, "provider")),
+      path: `/v1/git-providers/gitlab/${encodeURIComponent(gitProviderId)}`,
+    });
+  }
+
+  async testGitlabProvider(
+    gitProviderId: string,
+  ): Promise<TestGitConnectionResponse> {
+    return this.request({
+      method: "POST",
+      parse: (body) => testGitConnectionResponseSchema.parse(body),
+      path: `/v1/git-providers/gitlab/${encodeURIComponent(gitProviderId)}/test`,
+    });
+  }
+
+  async listGitlabRepositories(
+    gitProviderId: string,
+  ): Promise<GitRepositoryListResponse> {
+    return this.request({
+      parse: (body) =>
+        gitRepositoryListResponseSchema.parse(
+          readProperty(body, "repositories"),
+        ),
+      path: `/v1/git-providers/gitlab/${encodeURIComponent(gitProviderId)}/repositories`,
+    });
+  }
+
+  async listGitlabBranches(
+    gitProviderId: string,
+    projectId: string,
+  ): Promise<GitBranchListResponse> {
+    const search = new URLSearchParams({ projectId });
+    return this.request({
+      parse: (body) =>
+        gitBranchListResponseSchema.parse(readProperty(body, "branches")),
+      path: `/v1/git-providers/gitlab/${encodeURIComponent(gitProviderId)}/branches?${search.toString()}`,
+    });
+  }
+
+  // Bitbucket
+  async createBitbucketProvider(
+    input: CreateBitbucketProviderRequest,
+  ): Promise<GitProviderResponse> {
+    return this.request({
+      body: input,
+      method: "POST",
+      parse: (body) =>
+        gitProviderResponseSchema.parse(readProperty(body, "provider")),
+      path: "/v1/git-providers/bitbucket",
+    });
+  }
+
+  async patchBitbucketProvider(
+    gitProviderId: string,
+    input: PatchBitbucketProviderRequest,
+  ): Promise<GitProviderResponse> {
+    return this.request({
+      body: input,
+      method: "PATCH",
+      parse: (body) =>
+        gitProviderResponseSchema.parse(readProperty(body, "provider")),
+      path: `/v1/git-providers/bitbucket/${encodeURIComponent(gitProviderId)}`,
+    });
+  }
+
+  async testBitbucketProvider(
+    gitProviderId: string,
+  ): Promise<TestGitConnectionResponse> {
+    return this.request({
+      method: "POST",
+      parse: (body) => testGitConnectionResponseSchema.parse(body),
+      path: `/v1/git-providers/bitbucket/${encodeURIComponent(gitProviderId)}/test`,
+    });
+  }
+
+  async listBitbucketRepositories(
+    gitProviderId: string,
+  ): Promise<GitRepositoryListResponse> {
+    return this.request({
+      parse: (body) =>
+        gitRepositoryListResponseSchema.parse(
+          readProperty(body, "repositories"),
+        ),
+      path: `/v1/git-providers/bitbucket/${encodeURIComponent(gitProviderId)}/repositories`,
+    });
+  }
+
+  async listBitbucketBranches(
+    gitProviderId: string,
+    workspace: string,
+    repoSlug: string,
+  ): Promise<GitBranchListResponse> {
+    const search = new URLSearchParams({ workspace, repoSlug });
+    return this.request({
+      parse: (body) =>
+        gitBranchListResponseSchema.parse(readProperty(body, "branches")),
+      path: `/v1/git-providers/bitbucket/${encodeURIComponent(gitProviderId)}/branches?${search.toString()}`,
+    });
+  }
+
+  // Gitea
+  async createGiteaProvider(
+    input: CreateGiteaProviderRequest,
+  ): Promise<GitProviderResponse> {
+    return this.request({
+      body: input,
+      method: "POST",
+      parse: (body) =>
+        gitProviderResponseSchema.parse(readProperty(body, "provider")),
+      path: "/v1/git-providers/gitea",
+    });
+  }
+
+  async patchGiteaProvider(
+    gitProviderId: string,
+    input: PatchGiteaProviderRequest,
+  ): Promise<GitProviderResponse> {
+    return this.request({
+      body: input,
+      method: "PATCH",
+      parse: (body) =>
+        gitProviderResponseSchema.parse(readProperty(body, "provider")),
+      path: `/v1/git-providers/gitea/${encodeURIComponent(gitProviderId)}`,
+    });
+  }
+
+  async testGiteaProvider(
+    gitProviderId: string,
+  ): Promise<TestGitConnectionResponse> {
+    return this.request({
+      method: "POST",
+      parse: (body) => testGitConnectionResponseSchema.parse(body),
+      path: `/v1/git-providers/gitea/${encodeURIComponent(gitProviderId)}/test`,
+    });
+  }
+
+  async listGiteaRepositories(
+    gitProviderId: string,
+  ): Promise<GitRepositoryListResponse> {
+    return this.request({
+      parse: (body) =>
+        gitRepositoryListResponseSchema.parse(
+          readProperty(body, "repositories"),
+        ),
+      path: `/v1/git-providers/gitea/${encodeURIComponent(gitProviderId)}/repositories`,
+    });
+  }
+
+  async listGiteaBranches(
+    gitProviderId: string,
+    owner: string,
+    repo: string,
+  ): Promise<GitBranchListResponse> {
+    const search = new URLSearchParams({ owner, repo });
+    return this.request({
+      parse: (body) =>
+        gitBranchListResponseSchema.parse(readProperty(body, "branches")),
+      path: `/v1/git-providers/gitea/${encodeURIComponent(gitProviderId)}/branches?${search.toString()}`,
+    });
+  }
+
+  /** Build the base URL for an OAuth callback (used by Add provider forms). */
+  gitOauthCallbackUrls(): {
+    githubSetup: string;
+    gitlabCallback: string;
+    giteaAuthorize: (gitProviderId: string) => string;
+    giteaCallback: string;
+  } {
+    return {
+      githubSetup: `${this.baseUrl}/v1/providers/github/setup`,
+      gitlabCallback: `${this.baseUrl}/v1/providers/gitlab/callback`,
+      giteaAuthorize: (gitProviderId: string) =>
+        `${this.baseUrl}/v1/providers/gitea/authorize?gitProviderId=${encodeURIComponent(gitProviderId)}`,
+      giteaCallback: `${this.baseUrl}/v1/providers/gitea/callback`,
+    };
   }
 
   async listProjects(

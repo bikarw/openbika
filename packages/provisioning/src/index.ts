@@ -87,9 +87,9 @@ export interface BackupS3Destination {
 }
 
 /**
- * How to locate the running Postgres Docker container. Following Dokploy, we
- * run `pg_dump` *inside* that container so the binary version always matches
- * the server (no "aborting because of server version mismatch" errors).
+ * How to locate the running Postgres Docker container. We run `pg_dump`
+ * *inside* that container so the binary version always matches the server (no
+ * "aborting because of server version mismatch" errors).
  */
 export type PostgresContainerLookup =
   | { kind: "name"; value: string }

@@ -6,8 +6,12 @@ import {
   branchSchemaResponseSchema,
   createBackupRequestSchema,
   createBackupScheduleRequestSchema,
+  createBitbucketProviderRequestSchema,
   createBranchRequestSchema,
   createDatabaseRequestSchema,
+  createGiteaProviderRequestSchema,
+  createGitlabProviderRequestSchema,
+  prepareGithubManifestRequestSchema,
   createOrganizationRequestSchema,
   createProjectRequestSchema,
   createRestoreRequestSchema,
@@ -19,13 +23,18 @@ import {
   normalizeServerDomainHost,
   parseIngressEmbeddedPublicIpv4,
   patchBackupScheduleRequestSchema,
+  patchBitbucketProviderRequestSchema,
   patchBranchSettingsRequestSchema,
+  patchGiteaProviderRequestSchema,
+  patchGithubProviderRequestSchema,
+  patchGitlabProviderRequestSchema,
   patchS3DestinationRequestSchema,
   patchServerDomainSettingsRequestSchema,
   patchWorkloadIngressDomainsRequestSchema,
   patchWorkloadEnvRequestSchema,
   pruneBlankWorkloadEnv,
   readOmitPlatformHostname,
+  renameGitProviderRequestSchema,
   resolveWorkloadEffectiveListenPorts,
   suggestWorkloadEdgeHostname,
   suggestWorkloadEmbeddedIpIngressHostname,
@@ -33,6 +42,7 @@ import {
   type BranchResponse,
   type BranchSchemaTableResponse,
   type DatabaseResponse,
+  type GitProviderResponse,
   type ProvisionWorkloadInput,
   type ServerDomainCertificateType,
   type ServerDomainSettingsResponse,
@@ -54,6 +64,24 @@ import slugify from "@sindresorhus/slugify";
 import type { z } from "zod";
 
 import type { ApiBindings } from "../context.js";
+import {
+  convertGithubManifest,
+  listBitbucketBranches,
+  listBitbucketRepositories,
+  listGiteaBranches,
+  listGiteaRepositories,
+  listGithubBranches,
+  listGithubRepositories,
+  listGitlabBranches,
+  listGitlabRepositories,
+  listGitProvidersForOrganization,
+  loadGitProviderRow,
+  serializeGitProvider,
+  testBitbucketConnection,
+  testGiteaConnection,
+  testGithubConnection,
+  testGitlabConnection,
+} from "../git-providers.js";
 import {
   startControlPlaneWorkflow,
   WorkflowDispatchError,
@@ -1734,6 +1762,1001 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       .where(eq(schema.s3Destinations.id, destinationId));
 
     return c.body(null, 204);
+  });
+
+  // ==========================================================================
+  // Git providers (GitHub, GitLab, Bitbucket, Gitea)
+  // ==========================================================================
+
+  routes.get("/git-providers", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const organizationId = c.req.query("organizationId");
+
+    if (!organizationId) {
+      throw new HTTPException(400, {
+        message: "organizationId query parameter is required",
+      });
+    }
+
+    await assertOrganizationAccess({
+      db,
+      organizationId,
+      userId: user.id,
+    });
+
+    const loaded = await listGitProvidersForOrganization(db, organizationId);
+    const providers: GitProviderResponse[] = loaded
+      .map(serializeGitProvider)
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+
+    return c.json({ providers });
+  });
+
+  routes.patch("/git-providers/:gitProviderId", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const gitProviderId = c.req.param("gitProviderId");
+    const input = await parseJson(c, renameGitProviderRequestSchema);
+
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    await assertOrganizationAccess({
+      db,
+      organizationId: loaded.parent.organizationId,
+      requireManager: true,
+      userId: user.id,
+    });
+
+    await db
+      .update(schema.gitProviders)
+      .set({ name: input.name, updatedAt: new Date() })
+      .where(eq(schema.gitProviders.id, gitProviderId));
+
+    const fresh = await loadGitProviderRow(db, gitProviderId);
+    return c.json({ provider: serializeGitProvider(fresh) });
+  });
+
+  routes.delete("/git-providers/:gitProviderId", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const gitProviderId = c.req.param("gitProviderId");
+
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    await assertOrganizationAccess({
+      db,
+      organizationId: loaded.parent.organizationId,
+      requireManager: true,
+      userId: user.id,
+    });
+
+    await db
+      .delete(schema.gitProviders)
+      .where(eq(schema.gitProviders.id, gitProviderId));
+
+    return c.body(null, 204);
+  });
+
+  // --- GitHub ---------------------------------------------------------------
+
+  /**
+   * Pure helper: builds the GitHub App manifest + the form action URL the
+   * dashboard should POST to. NO row is inserted — the database row is created
+   * when GitHub redirects back to /v1/providers/github/setup with the `code`.
+   */
+  routes.post("/git-providers/github/prepare-manifest", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const input = await parseJson(c, prepareGithubManifestRequestSchema);
+
+    await assertOrganizationAccess({
+      db,
+      organizationId: input.organizationId,
+      requireManager: true,
+      userId: user.id,
+    });
+
+    const apiBase = env.API_PUBLIC_URL.replace(/\/$/u, "");
+    const callbackUrl = `${apiBase}/v1/providers/github/setup`;
+    const webhookUrl = `${apiBase}/v1/providers/github/webhook`;
+    const manifestState = `gh_init:${input.organizationId}`;
+    const randomSuffix = Math.random().toString(36).slice(2, 8);
+    const isoDay = new Date().toISOString().slice(0, 10);
+    // GitHub rejects manifests whose hook URL isn't reachable over the public
+    // internet. If API_PUBLIC_URL is localhost, omit hook_attributes entirely
+    // — apps without webhooks are valid, and the user can edit the manifest
+    // in the dashboard to add a tunnel URL later.
+    const isLocalApiBase = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|\/|$)/iu.test(
+      apiBase,
+    );
+    const manifestObject: Record<string, unknown> = {
+      name: `OpenBika-${isoDay}-${randomSuffix}`,
+      url: env.WEB_ORIGIN,
+      redirect_url: callbackUrl,
+      callback_urls: [callbackUrl],
+      public: false,
+      request_oauth_on_install: true,
+      default_permissions: {
+        contents: "read",
+        metadata: "read",
+        emails: "read",
+        pull_requests: "write",
+      },
+    };
+    const includeWebhookHook =
+      !isLocalApiBase && webhookUrl.length > 0;
+    // GitHub requires a non-empty hook URL whenever default_events subscribes
+    // to repository events — otherwise registration fails (“Hook url cannot be
+    // blank”). Either ship hook_attributes + events together, or neither.
+    if (includeWebhookHook) {
+      manifestObject.hook_attributes = { url: webhookUrl };
+      manifestObject.default_events = ["pull_request", "push"];
+    } else {
+      manifestObject.default_events = [];
+    }
+    const manifest = JSON.stringify(manifestObject, null, 2);
+
+    const stateParam = encodeURIComponent(manifestState);
+    const actionUrl =
+      input.isOrganization && input.organizationName
+        ? `https://github.com/organizations/${encodeURIComponent(input.organizationName)}/settings/apps/new?state=${stateParam}`
+        : `https://github.com/settings/apps/new?state=${stateParam}`;
+
+    return c.json({ manifest, manifestState, actionUrl });
+  });
+
+  routes.patch("/git-providers/github/:gitProviderId", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const gitProviderId = c.req.param("gitProviderId");
+    const input = await parseJson(c, patchGithubProviderRequestSchema);
+
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    if (loaded.parent.providerType !== "github" || !loaded.github) {
+      throw new HTTPException(400, {
+        message: "Not a GitHub provider",
+      });
+    }
+    await assertOrganizationAccess({
+      db,
+      organizationId: loaded.parent.organizationId,
+      requireManager: true,
+      userId: user.id,
+    });
+
+    if (input.name !== undefined) {
+      await db
+        .update(schema.gitProviders)
+        .set({ name: input.name, updatedAt: new Date() })
+        .where(eq(schema.gitProviders.id, gitProviderId));
+    }
+    if (input.appName !== undefined) {
+      await db
+        .update(schema.githubProviders)
+        .set({ appName: input.appName, updatedAt: new Date() })
+        .where(eq(schema.githubProviders.id, loaded.github.id));
+    }
+
+    const fresh = await loadGitProviderRow(db, gitProviderId);
+    return c.json({ provider: serializeGitProvider(fresh) });
+  });
+
+  routes.post("/git-providers/github/:gitProviderId/test", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const gitProviderId = c.req.param("gitProviderId");
+
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    if (loaded.parent.providerType !== "github" || !loaded.github) {
+      throw new HTTPException(400, { message: "Not a GitHub provider" });
+    }
+    await assertOrganizationAccess({
+      db,
+      organizationId: loaded.parent.organizationId,
+      userId: user.id,
+    });
+
+    const result = await testGithubConnection(loaded.github);
+    return c.json(result);
+  });
+
+  routes.get(
+    "/git-providers/github/:gitProviderId/repositories",
+    async (c) => {
+      const user = requireUser(c);
+      const db = c.get("db");
+      const gitProviderId = c.req.param("gitProviderId");
+
+      const loaded = await loadGitProviderRow(db, gitProviderId);
+      if (loaded.parent.providerType !== "github" || !loaded.github) {
+        throw new HTTPException(400, { message: "Not a GitHub provider" });
+      }
+      await assertOrganizationAccess({
+        db,
+        organizationId: loaded.parent.organizationId,
+        userId: user.id,
+      });
+
+      const repositories = await listGithubRepositories(loaded.github);
+      return c.json({ repositories });
+    },
+  );
+
+  routes.get("/git-providers/github/:gitProviderId/branches", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const gitProviderId = c.req.param("gitProviderId");
+    const owner = c.req.query("owner");
+    const repo = c.req.query("repo");
+
+    if (!owner || !repo) {
+      throw new HTTPException(400, {
+        message: "owner and repo query parameters are required",
+      });
+    }
+
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    if (loaded.parent.providerType !== "github" || !loaded.github) {
+      throw new HTTPException(400, { message: "Not a GitHub provider" });
+    }
+    await assertOrganizationAccess({
+      db,
+      organizationId: loaded.parent.organizationId,
+      userId: user.id,
+    });
+
+    const branches = await listGithubBranches(loaded.github, owner, repo);
+    return c.json({ branches });
+  });
+
+  // --- GitLab ---------------------------------------------------------------
+
+  routes.post("/git-providers/gitlab", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const input = await parseJson(c, createGitlabProviderRequestSchema);
+
+    await assertOrganizationAccess({
+      db,
+      organizationId: input.organizationId,
+      requireManager: true,
+      userId: user.id,
+    });
+
+    const parentId = createId("git_provider");
+    const childId = createId("gitlab_provider");
+
+    await db.insert(schema.gitProviders).values({
+      id: parentId,
+      organizationId: input.organizationId,
+      name: input.name,
+      providerType: "gitlab",
+    });
+    await db.insert(schema.gitlabProviders).values({
+      id: childId,
+      gitProviderId: parentId,
+      gitlabUrl: input.gitlabUrl,
+      gitlabInternalUrl: input.gitlabInternalUrl ?? null,
+      applicationId: input.applicationId,
+      secret: input.secret,
+      redirectUri: input.redirectUri,
+      groupName: input.groupName ?? null,
+    });
+
+    const fresh = await loadGitProviderRow(db, parentId);
+    return c.json({ provider: serializeGitProvider(fresh) }, 201);
+  });
+
+  routes.patch("/git-providers/gitlab/:gitProviderId", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const gitProviderId = c.req.param("gitProviderId");
+    const input = await parseJson(c, patchGitlabProviderRequestSchema);
+
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    if (loaded.parent.providerType !== "gitlab" || !loaded.gitlab) {
+      throw new HTTPException(400, { message: "Not a GitLab provider" });
+    }
+    await assertOrganizationAccess({
+      db,
+      organizationId: loaded.parent.organizationId,
+      requireManager: true,
+      userId: user.id,
+    });
+
+    if (input.name !== undefined) {
+      await db
+        .update(schema.gitProviders)
+        .set({ name: input.name, updatedAt: new Date() })
+        .where(eq(schema.gitProviders.id, gitProviderId));
+    }
+
+    const patch: Partial<typeof schema.gitlabProviders.$inferInsert> = {
+      updatedAt: new Date(),
+    };
+    if (input.gitlabUrl !== undefined) patch.gitlabUrl = input.gitlabUrl;
+    if (input.gitlabInternalUrl !== undefined)
+      patch.gitlabInternalUrl = input.gitlabInternalUrl;
+    if (input.applicationId !== undefined)
+      patch.applicationId = input.applicationId;
+    if (input.secret !== undefined) patch.secret = input.secret;
+    if (input.redirectUri !== undefined) patch.redirectUri = input.redirectUri;
+    if (input.groupName !== undefined) patch.groupName = input.groupName;
+
+    if (Object.keys(patch).length > 1) {
+      await db
+        .update(schema.gitlabProviders)
+        .set(patch)
+        .where(eq(schema.gitlabProviders.id, loaded.gitlab.id));
+    }
+
+    const fresh = await loadGitProviderRow(db, gitProviderId);
+    return c.json({ provider: serializeGitProvider(fresh) });
+  });
+
+  routes.post("/git-providers/gitlab/:gitProviderId/test", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const gitProviderId = c.req.param("gitProviderId");
+
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    if (loaded.parent.providerType !== "gitlab" || !loaded.gitlab) {
+      throw new HTTPException(400, { message: "Not a GitLab provider" });
+    }
+    await assertOrganizationAccess({
+      db,
+      organizationId: loaded.parent.organizationId,
+      userId: user.id,
+    });
+
+    const result = await testGitlabConnection(db, loaded.gitlab);
+    return c.json(result);
+  });
+
+  routes.get(
+    "/git-providers/gitlab/:gitProviderId/repositories",
+    async (c) => {
+      const user = requireUser(c);
+      const db = c.get("db");
+      const gitProviderId = c.req.param("gitProviderId");
+
+      const loaded = await loadGitProviderRow(db, gitProviderId);
+      if (loaded.parent.providerType !== "gitlab" || !loaded.gitlab) {
+        throw new HTTPException(400, { message: "Not a GitLab provider" });
+      }
+      await assertOrganizationAccess({
+        db,
+        organizationId: loaded.parent.organizationId,
+        userId: user.id,
+      });
+
+      const repositories = await listGitlabRepositories(db, loaded.gitlab);
+      return c.json({ repositories });
+    },
+  );
+
+  routes.get("/git-providers/gitlab/:gitProviderId/branches", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const gitProviderId = c.req.param("gitProviderId");
+    const projectId = c.req.query("projectId");
+
+    if (!projectId) {
+      throw new HTTPException(400, {
+        message: "projectId query parameter is required",
+      });
+    }
+
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    if (loaded.parent.providerType !== "gitlab" || !loaded.gitlab) {
+      throw new HTTPException(400, { message: "Not a GitLab provider" });
+    }
+    await assertOrganizationAccess({
+      db,
+      organizationId: loaded.parent.organizationId,
+      userId: user.id,
+    });
+
+    const branches = await listGitlabBranches(db, loaded.gitlab, projectId);
+    return c.json({ branches });
+  });
+
+  // --- Bitbucket ------------------------------------------------------------
+
+  routes.post("/git-providers/bitbucket", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const input = await parseJson(c, createBitbucketProviderRequestSchema);
+
+    await assertOrganizationAccess({
+      db,
+      organizationId: input.organizationId,
+      requireManager: true,
+      userId: user.id,
+    });
+
+    const parentId = createId("git_provider");
+    const childId = createId("bitbucket_provider");
+
+    await db.insert(schema.gitProviders).values({
+      id: parentId,
+      organizationId: input.organizationId,
+      name: input.name,
+      providerType: "bitbucket",
+    });
+    await db.insert(schema.bitbucketProviders).values({
+      id: childId,
+      gitProviderId: parentId,
+      username: input.username,
+      email: input.email ?? null,
+      apiToken: input.apiToken,
+      workspaceName: input.workspaceName ?? null,
+    });
+
+    const fresh = await loadGitProviderRow(db, parentId);
+    return c.json({ provider: serializeGitProvider(fresh) }, 201);
+  });
+
+  routes.patch("/git-providers/bitbucket/:gitProviderId", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const gitProviderId = c.req.param("gitProviderId");
+    const input = await parseJson(c, patchBitbucketProviderRequestSchema);
+
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    if (loaded.parent.providerType !== "bitbucket" || !loaded.bitbucket) {
+      throw new HTTPException(400, { message: "Not a Bitbucket provider" });
+    }
+    await assertOrganizationAccess({
+      db,
+      organizationId: loaded.parent.organizationId,
+      requireManager: true,
+      userId: user.id,
+    });
+
+    if (input.name !== undefined) {
+      await db
+        .update(schema.gitProviders)
+        .set({ name: input.name, updatedAt: new Date() })
+        .where(eq(schema.gitProviders.id, gitProviderId));
+    }
+
+    const patch: Partial<typeof schema.bitbucketProviders.$inferInsert> = {
+      updatedAt: new Date(),
+    };
+    if (input.username !== undefined) patch.username = input.username;
+    if (input.email !== undefined) patch.email = input.email;
+    if (input.apiToken !== undefined) patch.apiToken = input.apiToken;
+    if (input.appPassword !== undefined) patch.appPassword = input.appPassword;
+    if (input.workspaceName !== undefined)
+      patch.workspaceName = input.workspaceName;
+
+    if (Object.keys(patch).length > 1) {
+      await db
+        .update(schema.bitbucketProviders)
+        .set(patch)
+        .where(eq(schema.bitbucketProviders.id, loaded.bitbucket.id));
+    }
+
+    const fresh = await loadGitProviderRow(db, gitProviderId);
+    return c.json({ provider: serializeGitProvider(fresh) });
+  });
+
+  routes.post("/git-providers/bitbucket/:gitProviderId/test", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const gitProviderId = c.req.param("gitProviderId");
+
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    if (loaded.parent.providerType !== "bitbucket" || !loaded.bitbucket) {
+      throw new HTTPException(400, { message: "Not a Bitbucket provider" });
+    }
+    await assertOrganizationAccess({
+      db,
+      organizationId: loaded.parent.organizationId,
+      userId: user.id,
+    });
+
+    const result = await testBitbucketConnection(loaded.bitbucket);
+    return c.json(result);
+  });
+
+  routes.get(
+    "/git-providers/bitbucket/:gitProviderId/repositories",
+    async (c) => {
+      const user = requireUser(c);
+      const db = c.get("db");
+      const gitProviderId = c.req.param("gitProviderId");
+
+      const loaded = await loadGitProviderRow(db, gitProviderId);
+      if (loaded.parent.providerType !== "bitbucket" || !loaded.bitbucket) {
+        throw new HTTPException(400, { message: "Not a Bitbucket provider" });
+      }
+      await assertOrganizationAccess({
+        db,
+        organizationId: loaded.parent.organizationId,
+        userId: user.id,
+      });
+
+      const repositories = await listBitbucketRepositories(loaded.bitbucket);
+      return c.json({ repositories });
+    },
+  );
+
+  routes.get("/git-providers/bitbucket/:gitProviderId/branches", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const gitProviderId = c.req.param("gitProviderId");
+    const workspace = c.req.query("workspace");
+    const repoSlug = c.req.query("repoSlug");
+
+    if (!workspace || !repoSlug) {
+      throw new HTTPException(400, {
+        message: "workspace and repoSlug query parameters are required",
+      });
+    }
+
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    if (loaded.parent.providerType !== "bitbucket" || !loaded.bitbucket) {
+      throw new HTTPException(400, { message: "Not a Bitbucket provider" });
+    }
+    await assertOrganizationAccess({
+      db,
+      organizationId: loaded.parent.organizationId,
+      userId: user.id,
+    });
+
+    const branches = await listBitbucketBranches(
+      loaded.bitbucket,
+      workspace,
+      repoSlug,
+    );
+    return c.json({ branches });
+  });
+
+  // --- Gitea ----------------------------------------------------------------
+
+  routes.post("/git-providers/gitea", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const input = await parseJson(c, createGiteaProviderRequestSchema);
+
+    await assertOrganizationAccess({
+      db,
+      organizationId: input.organizationId,
+      requireManager: true,
+      userId: user.id,
+    });
+
+    const parentId = createId("git_provider");
+    const childId = createId("gitea_provider");
+
+    await db.insert(schema.gitProviders).values({
+      id: parentId,
+      organizationId: input.organizationId,
+      name: input.name,
+      providerType: "gitea",
+    });
+    await db.insert(schema.giteaProviders).values({
+      id: childId,
+      gitProviderId: parentId,
+      giteaUrl: input.giteaUrl,
+      giteaInternalUrl: input.giteaInternalUrl ?? null,
+      redirectUri: input.redirectUri,
+      clientId: input.clientId,
+      clientSecret: input.clientSecret,
+    });
+
+    const fresh = await loadGitProviderRow(db, parentId);
+    return c.json({ provider: serializeGitProvider(fresh) }, 201);
+  });
+
+  routes.patch("/git-providers/gitea/:gitProviderId", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const gitProviderId = c.req.param("gitProviderId");
+    const input = await parseJson(c, patchGiteaProviderRequestSchema);
+
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    if (loaded.parent.providerType !== "gitea" || !loaded.gitea) {
+      throw new HTTPException(400, { message: "Not a Gitea provider" });
+    }
+    await assertOrganizationAccess({
+      db,
+      organizationId: loaded.parent.organizationId,
+      requireManager: true,
+      userId: user.id,
+    });
+
+    if (input.name !== undefined) {
+      await db
+        .update(schema.gitProviders)
+        .set({ name: input.name, updatedAt: new Date() })
+        .where(eq(schema.gitProviders.id, gitProviderId));
+    }
+
+    const patch: Partial<typeof schema.giteaProviders.$inferInsert> = {
+      updatedAt: new Date(),
+    };
+    if (input.giteaUrl !== undefined) patch.giteaUrl = input.giteaUrl;
+    if (input.giteaInternalUrl !== undefined)
+      patch.giteaInternalUrl = input.giteaInternalUrl;
+    if (input.redirectUri !== undefined) patch.redirectUri = input.redirectUri;
+    if (input.clientId !== undefined) patch.clientId = input.clientId;
+    if (input.clientSecret !== undefined)
+      patch.clientSecret = input.clientSecret;
+
+    if (Object.keys(patch).length > 1) {
+      await db
+        .update(schema.giteaProviders)
+        .set(patch)
+        .where(eq(schema.giteaProviders.id, loaded.gitea.id));
+    }
+
+    const fresh = await loadGitProviderRow(db, gitProviderId);
+    return c.json({ provider: serializeGitProvider(fresh) });
+  });
+
+  routes.post("/git-providers/gitea/:gitProviderId/test", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const gitProviderId = c.req.param("gitProviderId");
+
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    if (loaded.parent.providerType !== "gitea" || !loaded.gitea) {
+      throw new HTTPException(400, { message: "Not a Gitea provider" });
+    }
+    await assertOrganizationAccess({
+      db,
+      organizationId: loaded.parent.organizationId,
+      userId: user.id,
+    });
+
+    const result = await testGiteaConnection(db, loaded.gitea);
+    return c.json(result);
+  });
+
+  routes.get("/git-providers/gitea/:gitProviderId/repositories", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const gitProviderId = c.req.param("gitProviderId");
+
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    if (loaded.parent.providerType !== "gitea" || !loaded.gitea) {
+      throw new HTTPException(400, { message: "Not a Gitea provider" });
+    }
+    await assertOrganizationAccess({
+      db,
+      organizationId: loaded.parent.organizationId,
+      userId: user.id,
+    });
+
+    const repositories = await listGiteaRepositories(db, loaded.gitea);
+    return c.json({ repositories });
+  });
+
+  routes.get("/git-providers/gitea/:gitProviderId/branches", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const gitProviderId = c.req.param("gitProviderId");
+    const owner = c.req.query("owner");
+    const repo = c.req.query("repo");
+
+    if (!owner || !repo) {
+      throw new HTTPException(400, {
+        message: "owner and repo query parameters are required",
+      });
+    }
+
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    if (loaded.parent.providerType !== "gitea" || !loaded.gitea) {
+      throw new HTTPException(400, { message: "Not a Gitea provider" });
+    }
+    await assertOrganizationAccess({
+      db,
+      organizationId: loaded.parent.organizationId,
+      userId: user.id,
+    });
+
+    const branches = await listGiteaBranches(db, loaded.gitea, owner, repo);
+    return c.json({ branches });
+  });
+
+  // ==========================================================================
+  // Git provider OAuth callbacks (public — no session required, validated by
+  // ephemeral codes/state from the upstream provider)
+  // ==========================================================================
+
+  async function resolveOrganizationSlug(
+    db: ControlPlaneDb,
+    organizationId: string,
+  ): Promise<string | null> {
+    const row = first(
+      await db
+        .select({ slug: schema.organizations.slug })
+        .from(schema.organizations)
+        .where(eq(schema.organizations.id, organizationId))
+        .limit(1),
+    );
+    return row?.slug ?? null;
+  }
+
+  function gitDashboardRedirect(
+    organizationSlug: string | null,
+    extra: Record<string, string> = {},
+  ): string {
+    const base = env.WEB_ORIGIN.replace(/\/$/u, "");
+    const target = organizationSlug
+      ? `${base}/${encodeURIComponent(organizationSlug)}/git`
+      : `${base}/`;
+    const params = new URLSearchParams(extra);
+    return params.size > 0 ? `${target}?${params.toString()}` : target;
+  }
+
+  routes.get("/providers/github/setup", async (c) => {
+    const db = c.get("db");
+    const code = c.req.query("code");
+    const state = c.req.query("state");
+    const installationId = c.req.query("installation_id");
+
+    if (!state) {
+      throw new HTTPException(400, { message: "Missing state parameter" });
+    }
+
+    const [kind, ...rest] = state.split(":");
+
+    if (kind === "gh_init") {
+      // ?state=gh_init:<organizationId> — manifest conversion + INSERT new rows
+      const [organizationId] = rest;
+      if (!code || !organizationId) {
+        throw new HTTPException(400, { message: "Invalid setup state" });
+      }
+      // Confirm the org still exists before persisting anything
+      const orgSlug = await resolveOrganizationSlug(db, organizationId);
+      if (!orgSlug) {
+        throw new HTTPException(404, { message: "Organization not found" });
+      }
+
+      const conversion = await convertGithubManifest(code);
+
+      const parentId = createId("git_provider");
+      const childId = createId("github_provider");
+
+      await db.insert(schema.gitProviders).values({
+        id: parentId,
+        organizationId,
+        name: conversion.name,
+        providerType: "github",
+      });
+      await db.insert(schema.githubProviders).values({
+        id: childId,
+        gitProviderId: parentId,
+        appName: conversion.html_url,
+        appId: conversion.id,
+        clientId: conversion.client_id,
+        clientSecret: conversion.client_secret,
+        webhookSecret: conversion.webhook_secret,
+        privateKey: conversion.pem,
+      });
+
+      return c.redirect(
+        gitDashboardRedirect(orgSlug, { github: "configured" }),
+        307,
+      );
+    }
+
+    if (kind === "gh_setup") {
+      // ?state=gh_setup:<gitProviderId>&installation_id=<id>
+      const [gitProviderId] = rest;
+      if (!gitProviderId || !installationId) {
+        throw new HTTPException(400, { message: "Invalid setup state" });
+      }
+      const loaded = await loadGitProviderRow(db, gitProviderId);
+      if (loaded.parent.providerType !== "github" || !loaded.github) {
+        throw new HTTPException(400, { message: "Invalid github setup" });
+      }
+      await db
+        .update(schema.githubProviders)
+        .set({
+          installationId,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.githubProviders.id, loaded.github.id));
+
+      const slug = await resolveOrganizationSlug(
+        db,
+        loaded.parent.organizationId,
+      );
+      return c.redirect(
+        gitDashboardRedirect(slug, { github: "installed" }),
+        307,
+      );
+    }
+
+    throw new HTTPException(400, { message: "Unknown setup state" });
+  });
+
+  routes.post("/providers/github/webhook", async (c) => {
+    // Stub: real webhook handling will arrive when we wire deploys.
+    // Acknowledge ping events so GitHub considers the hook healthy.
+    return c.body(null, 204);
+  });
+
+  routes.get("/providers/gitlab/callback", async (c) => {
+    const db = c.get("db");
+    const code = c.req.query("code");
+    const gitProviderId = c.req.query("gitProviderId");
+
+    if (!code || !gitProviderId) {
+      throw new HTTPException(400, {
+        message: "code and gitProviderId are required",
+      });
+    }
+
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    if (loaded.parent.providerType !== "gitlab" || !loaded.gitlab) {
+      throw new HTTPException(400, { message: "Not a GitLab provider" });
+    }
+    const gitlab = loaded.gitlab;
+    if (!gitlab.applicationId || !gitlab.secret || !gitlab.redirectUri) {
+      throw new HTTPException(400, {
+        message: "GitLab provider missing OAuth config",
+      });
+    }
+
+    const base = (gitlab.gitlabInternalUrl ?? gitlab.gitlabUrl).replace(
+      /\/$/u,
+      "",
+    );
+    const params = new URLSearchParams({
+      client_id: gitlab.applicationId,
+      client_secret: gitlab.secret,
+      code,
+      grant_type: "authorization_code",
+      redirect_uri: gitlab.redirectUri,
+    });
+    const response = await fetch(`${base}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: params.toString(),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new HTTPException(502, {
+        message: `GitLab token exchange failed (HTTP ${String(response.status)}): ${text.slice(0, 200)}`,
+      });
+    }
+    const body = (await response.json()) as {
+      access_token: string;
+      refresh_token: string;
+      expires_in: number;
+    };
+    const expiresAt = Math.floor(Date.now() / 1000) + body.expires_in;
+    await db
+      .update(schema.gitlabProviders)
+      .set({
+        accessToken: body.access_token,
+        refreshToken: body.refresh_token,
+        expiresAt,
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.gitlabProviders.id, gitlab.id));
+
+    const slug = await resolveOrganizationSlug(
+      db,
+      loaded.parent.organizationId,
+    );
+    return c.redirect(
+      gitDashboardRedirect(slug, { gitlab: "connected" }),
+      307,
+    );
+  });
+
+  routes.get("/providers/gitea/authorize", async (c) => {
+    const db = c.get("db");
+    const gitProviderId = c.req.query("gitProviderId");
+    if (!gitProviderId) {
+      throw new HTTPException(400, {
+        message: "gitProviderId is required",
+      });
+    }
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    if (loaded.parent.providerType !== "gitea" || !loaded.gitea) {
+      throw new HTTPException(400, { message: "Not a Gitea provider" });
+    }
+    const gitea = loaded.gitea;
+    if (!gitea.clientId || !gitea.redirectUri) {
+      throw new HTTPException(400, {
+        message: "Gitea provider missing OAuth config",
+      });
+    }
+    const base = gitea.giteaUrl.replace(/\/$/u, "");
+    const params = new URLSearchParams({
+      client_id: gitea.clientId,
+      response_type: "code",
+      redirect_uri: gitea.redirectUri,
+      scope: gitea.scopes.split(",").join(" "),
+      state: gitProviderId,
+    });
+    return c.redirect(`${base}/login/oauth/authorize?${params.toString()}`, 307);
+  });
+
+  routes.get("/providers/gitea/callback", async (c) => {
+    const db = c.get("db");
+    const code = c.req.query("code");
+    const state = c.req.query("state");
+
+    if (!code || !state) {
+      throw new HTTPException(400, {
+        message: "code and state are required",
+      });
+    }
+
+    const loaded = await loadGitProviderRow(db, state);
+    if (loaded.parent.providerType !== "gitea" || !loaded.gitea) {
+      throw new HTTPException(400, { message: "Not a Gitea provider" });
+    }
+    const gitea = loaded.gitea;
+    if (!gitea.clientId || !gitea.clientSecret || !gitea.redirectUri) {
+      throw new HTTPException(400, {
+        message: "Gitea provider missing OAuth config",
+      });
+    }
+
+    const base = (gitea.giteaInternalUrl ?? gitea.giteaUrl).replace(
+      /\/$/u,
+      "",
+    );
+    const params = new URLSearchParams({
+      client_id: gitea.clientId,
+      client_secret: gitea.clientSecret,
+      code,
+      grant_type: "authorization_code",
+      redirect_uri: gitea.redirectUri,
+    });
+    const response = await fetch(`${base}/login/oauth/access_token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: params.toString(),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      const slug = await resolveOrganizationSlug(
+        db,
+        loaded.parent.organizationId,
+      );
+      return c.redirect(
+        gitDashboardRedirect(slug, {
+          gitea: "error",
+          message: text.slice(0, 200),
+        }),
+        307,
+      );
+    }
+    const body = (await response.json()) as {
+      access_token: string;
+      refresh_token: string;
+      expires_in: number;
+    };
+    const expiresAt = Math.floor(Date.now() / 1000) + body.expires_in;
+    await db
+      .update(schema.giteaProviders)
+      .set({
+        accessToken: body.access_token,
+        refreshToken: body.refresh_token,
+        expiresAt,
+        lastAuthenticatedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.giteaProviders.id, gitea.id));
+
+    const slug = await resolveOrganizationSlug(
+      db,
+      loaded.parent.organizationId,
+    );
+    return c.redirect(
+      gitDashboardRedirect(slug, { gitea: "connected" }),
+      307,
+    );
   });
 
   routes.get("/projects", async (c) => {

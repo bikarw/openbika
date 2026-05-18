@@ -78,6 +78,13 @@
       "when": 1779053589097,
       "tag": "0011_dark_goblin_queen",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1779058052335,
+      "tag": "0012_lonely_multiple_man",
+      "breakpoints": true
     }
   ]
 }

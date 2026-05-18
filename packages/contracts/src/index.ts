@@ -1188,3 +1188,285 @@ export const s3DestinationResponseSchema = z.object({
 export type S3DestinationResponse = z.infer<
   typeof s3DestinationResponseSchema
 >;
+
+// ============================================================================
+// Git providers
+// ============================================================================
+
+export const gitProviderTypeSchema = z.enum([
+  "github",
+  "gitlab",
+  "bitbucket",
+  "gitea",
+]);
+export type GitProviderType = z.infer<typeof gitProviderTypeSchema>;
+
+const httpUrlSchema = z
+  .string()
+  .min(1)
+  .url()
+  .refine((v) => v.startsWith("http://") || v.startsWith("https://"), {
+    message: "URL must start with http:// or https://",
+  });
+
+// --- Provider-specific public detail shapes (no secrets) -------------------
+
+export const githubProviderDetailsSchema = z.object({
+  appName: z.string().nullable(),
+  appId: z.number().nullable(),
+  clientId: z.string().nullable(),
+  installationId: z.string().nullable(),
+  hasClientSecret: z.boolean(),
+  hasPrivateKey: z.boolean(),
+  hasWebhookSecret: z.boolean(),
+});
+export type GithubProviderDetails = z.infer<typeof githubProviderDetailsSchema>;
+
+export const gitlabProviderDetailsSchema = z.object({
+  gitlabUrl: z.string(),
+  gitlabInternalUrl: z.string().nullable(),
+  applicationId: z.string().nullable(),
+  redirectUri: z.string().nullable(),
+  groupName: z.string().nullable(),
+  expiresAt: z.number().nullable(),
+  hasSecret: z.boolean(),
+  hasAccessToken: z.boolean(),
+  hasRefreshToken: z.boolean(),
+});
+export type GitlabProviderDetails = z.infer<typeof gitlabProviderDetailsSchema>;
+
+export const bitbucketProviderDetailsSchema = z.object({
+  username: z.string().nullable(),
+  email: z.string().nullable(),
+  workspaceName: z.string().nullable(),
+  hasApiToken: z.boolean(),
+  hasAppPassword: z.boolean(),
+});
+export type BitbucketProviderDetails = z.infer<
+  typeof bitbucketProviderDetailsSchema
+>;
+
+export const giteaProviderDetailsSchema = z.object({
+  giteaUrl: z.string(),
+  giteaInternalUrl: z.string().nullable(),
+  redirectUri: z.string().nullable(),
+  clientId: z.string().nullable(),
+  scopes: z.string(),
+  expiresAt: z.number().nullable(),
+  lastAuthenticatedAt: z.string().nullable(),
+  hasClientSecret: z.boolean(),
+  hasAccessToken: z.boolean(),
+  hasRefreshToken: z.boolean(),
+});
+export type GiteaProviderDetails = z.infer<typeof giteaProviderDetailsSchema>;
+
+// --- Unified list response -------------------------------------------------
+
+export const gitProviderResponseSchema = z.object({
+  id: idSchema,
+  organizationId: idSchema,
+  name: z.string(),
+  providerType: gitProviderTypeSchema,
+  isReady: z.boolean(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  details: z.union([
+    z.object({ providerType: z.literal("github") }).merge(
+      githubProviderDetailsSchema,
+    ),
+    z.object({ providerType: z.literal("gitlab") }).merge(
+      gitlabProviderDetailsSchema,
+    ),
+    z.object({ providerType: z.literal("bitbucket") }).merge(
+      bitbucketProviderDetailsSchema,
+    ),
+    z.object({ providerType: z.literal("gitea") }).merge(
+      giteaProviderDetailsSchema,
+    ),
+  ]),
+});
+export type GitProviderResponse = z.infer<typeof gitProviderResponseSchema>;
+
+// --- Create requests -------------------------------------------------------
+
+/**
+ * Prepare the GitHub App manifest. Pure: returns the JSON manifest, the OAuth
+ * `state` to embed, and the GitHub `action_url` the browser should POST the
+ * manifest form to. No DB row is inserted; the row is created when GitHub
+ * redirects back to /v1/providers/github/setup with the `code`.
+ */
+export const prepareGithubManifestRequestSchema = z
+  .object({
+    organizationId: idSchema,
+    isOrganization: z.boolean().optional().default(false),
+    organizationName: z.string().min(1).max(120).optional(),
+  })
+  .refine(
+    (value) =>
+      !value.isOrganization ||
+      (value.organizationName !== undefined &&
+        value.organizationName.trim().length > 0),
+    {
+      message:
+        "organizationName is required when isOrganization is true",
+      path: ["organizationName"],
+    },
+  );
+export type PrepareGithubManifestRequest = z.infer<
+  typeof prepareGithubManifestRequestSchema
+>;
+
+export const prepareGithubManifestResponseSchema = z.object({
+  manifest: z.string(),
+  manifestState: z.string(),
+  actionUrl: z.string().url(),
+});
+export type PrepareGithubManifestResponse = z.infer<
+  typeof prepareGithubManifestResponseSchema
+>;
+
+export const createGitlabProviderRequestSchema = z.object({
+  organizationId: idSchema,
+  name: z.string().min(1).max(120),
+  gitlabUrl: httpUrlSchema.default("https://gitlab.com"),
+  gitlabInternalUrl: httpUrlSchema.optional(),
+  applicationId: z.string().min(1),
+  secret: z.string().min(1),
+  redirectUri: httpUrlSchema,
+  groupName: z.string().optional(),
+});
+export type CreateGitlabProviderRequest = z.infer<
+  typeof createGitlabProviderRequestSchema
+>;
+
+export const createBitbucketProviderRequestSchema = z.object({
+  organizationId: idSchema,
+  name: z.string().min(1).max(120),
+  username: z.string().min(1),
+  email: z.string().email().optional(),
+  apiToken: z.string().min(1),
+  workspaceName: z.string().optional(),
+});
+export type CreateBitbucketProviderRequest = z.infer<
+  typeof createBitbucketProviderRequestSchema
+>;
+
+export const createGiteaProviderRequestSchema = z.object({
+  organizationId: idSchema,
+  name: z.string().min(1).max(120),
+  giteaUrl: httpUrlSchema.default("https://gitea.com"),
+  giteaInternalUrl: httpUrlSchema.optional(),
+  redirectUri: httpUrlSchema,
+  clientId: z.string().min(1),
+  clientSecret: z.string().min(1),
+});
+export type CreateGiteaProviderRequest = z.infer<
+  typeof createGiteaProviderRequestSchema
+>;
+
+// --- Rename (parent) -------------------------------------------------------
+
+export const renameGitProviderRequestSchema = z.object({
+  name: z.string().min(1).max(120),
+});
+export type RenameGitProviderRequest = z.infer<
+  typeof renameGitProviderRequestSchema
+>;
+
+// --- Patch requests (vendor-specific edits) --------------------------------
+
+export const patchGithubProviderRequestSchema = z
+  .object({
+    name: z.string().min(1).max(120).optional(),
+    appName: z.string().min(1).optional(),
+  })
+  .refine((v) => Object.values(v).some((f) => f !== undefined), {
+    message: "At least one field is required",
+  });
+export type PatchGithubProviderRequest = z.infer<
+  typeof patchGithubProviderRequestSchema
+>;
+
+export const patchGitlabProviderRequestSchema = z
+  .object({
+    name: z.string().min(1).max(120).optional(),
+    gitlabUrl: httpUrlSchema.optional(),
+    gitlabInternalUrl: httpUrlSchema.nullable().optional(),
+    applicationId: z.string().min(1).optional(),
+    secret: z.string().min(1).optional(),
+    redirectUri: httpUrlSchema.optional(),
+    groupName: z.string().nullable().optional(),
+  })
+  .refine((v) => Object.values(v).some((f) => f !== undefined), {
+    message: "At least one field is required",
+  });
+export type PatchGitlabProviderRequest = z.infer<
+  typeof patchGitlabProviderRequestSchema
+>;
+
+export const patchBitbucketProviderRequestSchema = z
+  .object({
+    name: z.string().min(1).max(120).optional(),
+    username: z.string().min(1).optional(),
+    email: z.string().email().nullable().optional(),
+    apiToken: z.string().min(1).optional(),
+    appPassword: z.string().min(1).optional(),
+    workspaceName: z.string().nullable().optional(),
+  })
+  .refine((v) => Object.values(v).some((f) => f !== undefined), {
+    message: "At least one field is required",
+  });
+export type PatchBitbucketProviderRequest = z.infer<
+  typeof patchBitbucketProviderRequestSchema
+>;
+
+export const patchGiteaProviderRequestSchema = z
+  .object({
+    name: z.string().min(1).max(120).optional(),
+    giteaUrl: httpUrlSchema.optional(),
+    giteaInternalUrl: httpUrlSchema.nullable().optional(),
+    redirectUri: httpUrlSchema.optional(),
+    clientId: z.string().min(1).optional(),
+    clientSecret: z.string().min(1).optional(),
+  })
+  .refine((v) => Object.values(v).some((f) => f !== undefined), {
+    message: "At least one field is required",
+  });
+export type PatchGiteaProviderRequest = z.infer<
+  typeof patchGiteaProviderRequestSchema
+>;
+
+// --- Test / repo / branch listings ----------------------------------------
+
+export const testGitConnectionResponseSchema = z.object({
+  ok: z.boolean(),
+  message: z.string(),
+});
+export type TestGitConnectionResponse = z.infer<
+  typeof testGitConnectionResponseSchema
+>;
+
+export const gitRepositorySchema = z.object({
+  id: z.union([z.string(), z.number()]),
+  name: z.string(),
+  fullName: z.string(),
+  owner: z.string(),
+  defaultBranch: z.string().nullable(),
+  private: z.boolean(),
+  url: z.string().nullable(),
+});
+export type GitRepository = z.infer<typeof gitRepositorySchema>;
+
+export const gitRepositoryListResponseSchema = z.array(gitRepositorySchema);
+export type GitRepositoryListResponse = z.infer<
+  typeof gitRepositoryListResponseSchema
+>;
+
+export const gitBranchSchema = z.object({
+  name: z.string(),
+  commitSha: z.string().nullable(),
+});
+export type GitBranch = z.infer<typeof gitBranchSchema>;
+
+export const gitBranchListResponseSchema = z.array(gitBranchSchema);
+export type GitBranchListResponse = z.infer<typeof gitBranchListResponseSchema>;

@@ -59,6 +59,13 @@ export const workloadStatus = pgEnum("workload_status", [
   "deleted",
 ]);
 
+export const gitProviderType = pgEnum("git_provider_type", [
+  "github",
+  "gitlab",
+  "bitbucket",
+  "gitea",
+]);
+
 const timestamps = {
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
@@ -474,3 +481,91 @@ export const auditEvents = pgTable(
     ).on(table.organizationId, table.createdAt),
   }),
 );
+
+/** Git provider connections (GitHub, GitLab, Bitbucket, Gitea). Credentials stored in plaintext; encrypt-at-rest is future work. */
+export const gitProviders = pgTable(
+  "git_providers",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    providerType: gitProviderType("provider_type").notNull(),
+    ...timestamps,
+  },
+  (table) => ({
+    organizationIdIdx: index("git_providers_organization_id_idx").on(
+      table.organizationId,
+    ),
+  }),
+);
+
+export const githubProviders = pgTable("github_providers", {
+  id: text("id").primaryKey(),
+  gitProviderId: text("git_provider_id")
+    .notNull()
+    .unique()
+    .references(() => gitProviders.id, { onDelete: "cascade" }),
+  appName: text("app_name"),
+  appId: integer("app_id"),
+  clientId: text("client_id"),
+  clientSecret: text("client_secret"),
+  installationId: text("installation_id"),
+  privateKey: text("private_key"),
+  webhookSecret: text("webhook_secret"),
+  ...timestamps,
+});
+
+export const gitlabProviders = pgTable("gitlab_providers", {
+  id: text("id").primaryKey(),
+  gitProviderId: text("git_provider_id")
+    .notNull()
+    .unique()
+    .references(() => gitProviders.id, { onDelete: "cascade" }),
+  gitlabUrl: text("gitlab_url").notNull().default("https://gitlab.com"),
+  gitlabInternalUrl: text("gitlab_internal_url"),
+  applicationId: text("application_id"),
+  redirectUri: text("redirect_uri"),
+  secret: text("secret"),
+  accessToken: text("access_token"),
+  refreshToken: text("refresh_token"),
+  groupName: text("group_name"),
+  expiresAt: integer("expires_at"),
+  ...timestamps,
+});
+
+export const bitbucketProviders = pgTable("bitbucket_providers", {
+  id: text("id").primaryKey(),
+  gitProviderId: text("git_provider_id")
+    .notNull()
+    .unique()
+    .references(() => gitProviders.id, { onDelete: "cascade" }),
+  username: text("username"),
+  email: text("email"),
+  appPassword: text("app_password"),
+  apiToken: text("api_token"),
+  workspaceName: text("workspace_name"),
+  ...timestamps,
+});
+
+export const giteaProviders = pgTable("gitea_providers", {
+  id: text("id").primaryKey(),
+  gitProviderId: text("git_provider_id")
+    .notNull()
+    .unique()
+    .references(() => gitProviders.id, { onDelete: "cascade" }),
+  giteaUrl: text("gitea_url").notNull().default("https://gitea.com"),
+  giteaInternalUrl: text("gitea_internal_url"),
+  redirectUri: text("redirect_uri"),
+  clientId: text("client_id"),
+  clientSecret: text("client_secret"),
+  accessToken: text("access_token"),
+  refreshToken: text("refresh_token"),
+  expiresAt: integer("expires_at"),
+  scopes: text("scopes").notNull().default("repo,read:user,read:org"),
+  lastAuthenticatedAt: timestamp("last_authenticated_at", {
+    withTimezone: true,
+  }),
+  ...timestamps,
+});

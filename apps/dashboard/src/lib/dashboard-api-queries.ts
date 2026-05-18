@@ -1,16 +1,25 @@
 import type {
   CreateBackupRequest,
   CreateBackupScheduleRequest,
+  CreateBitbucketProviderRequest,
   CreateBranchRequest,
   CreateDatabaseRequest,
+  CreateGiteaProviderRequest,
+  CreateGitlabProviderRequest,
+  PrepareGithubManifestRequest,
   CreateProjectRequest,
   CreateRestoreRequest,
   CreateWorkloadRequest,
   PatchBackupScheduleRequest,
+  PatchBitbucketProviderRequest,
   PatchBranchSettingsRequest,
+  PatchGiteaProviderRequest,
+  PatchGithubProviderRequest,
+  PatchGitlabProviderRequest,
   PatchServerDomainSettingsRequest,
   PatchWorkloadEnvRequest,
   PatchWorkloadIngressDomainsRequest,
+  RenameGitProviderRequest,
 } from "@openbika/contracts";
 import type { QueryClient } from "@tanstack/react-query";
 
@@ -55,6 +64,30 @@ export const dashboardKeys = {
       "backup-schedules",
       databaseId,
       branchId ?? "all",
+    ] as const,
+  gitProviders: (organizationId: string) =>
+    [...dashboardKeys.root, "git-providers", organizationId] as const,
+  gitRepositories: (
+    providerType: "github" | "gitlab" | "bitbucket" | "gitea",
+    gitProviderId: string,
+  ) =>
+    [
+      ...dashboardKeys.root,
+      "git-repositories",
+      providerType,
+      gitProviderId,
+    ] as const,
+  gitBranches: (
+    providerType: "github" | "gitlab" | "bitbucket" | "gitea",
+    gitProviderId: string,
+    repoKey: string,
+  ) =>
+    [
+      ...dashboardKeys.root,
+      "git-branches",
+      providerType,
+      gitProviderId,
+      repoKey,
     ] as const,
 };
 
@@ -231,6 +264,91 @@ export async function patchBackupScheduleRequest(
 
 export async function deleteBackupScheduleRequest(scheduleId: string) {
   return getDashboardApiClient().deleteBackupSchedule(scheduleId);
+}
+
+// --- Git providers ---------------------------------------------------------
+
+export async function fetchGitProviders(organizationId: string) {
+  return getDashboardApiClient().listGitProviders(organizationId);
+}
+
+export async function renameGitProviderRequest(
+  gitProviderId: string,
+  input: RenameGitProviderRequest,
+) {
+  return getDashboardApiClient().renameGitProvider(gitProviderId, input);
+}
+
+export async function deleteGitProviderRequest(gitProviderId: string) {
+  return getDashboardApiClient().deleteGitProvider(gitProviderId);
+}
+
+export async function prepareGithubManifestRequest(
+  input: PrepareGithubManifestRequest,
+) {
+  return getDashboardApiClient().prepareGithubManifest(input);
+}
+
+export async function patchGithubProviderRequest(
+  gitProviderId: string,
+  input: PatchGithubProviderRequest,
+) {
+  return getDashboardApiClient().patchGithubProvider(gitProviderId, input);
+}
+
+export async function testGithubProviderRequest(gitProviderId: string) {
+  return getDashboardApiClient().testGithubProvider(gitProviderId);
+}
+
+export async function createGitlabProviderRequest(
+  input: CreateGitlabProviderRequest,
+) {
+  return getDashboardApiClient().createGitlabProvider(input);
+}
+
+export async function patchGitlabProviderRequest(
+  gitProviderId: string,
+  input: PatchGitlabProviderRequest,
+) {
+  return getDashboardApiClient().patchGitlabProvider(gitProviderId, input);
+}
+
+export async function testGitlabProviderRequest(gitProviderId: string) {
+  return getDashboardApiClient().testGitlabProvider(gitProviderId);
+}
+
+export async function createBitbucketProviderRequest(
+  input: CreateBitbucketProviderRequest,
+) {
+  return getDashboardApiClient().createBitbucketProvider(input);
+}
+
+export async function patchBitbucketProviderRequest(
+  gitProviderId: string,
+  input: PatchBitbucketProviderRequest,
+) {
+  return getDashboardApiClient().patchBitbucketProvider(gitProviderId, input);
+}
+
+export async function testBitbucketProviderRequest(gitProviderId: string) {
+  return getDashboardApiClient().testBitbucketProvider(gitProviderId);
+}
+
+export async function createGiteaProviderRequest(
+  input: CreateGiteaProviderRequest,
+) {
+  return getDashboardApiClient().createGiteaProvider(input);
+}
+
+export async function patchGiteaProviderRequest(
+  gitProviderId: string,
+  input: PatchGiteaProviderRequest,
+) {
+  return getDashboardApiClient().patchGiteaProvider(gitProviderId, input);
+}
+
+export async function testGiteaProviderRequest(gitProviderId: string) {
+  return getDashboardApiClient().testGiteaProvider(gitProviderId);
 }
 
 /** Resolve database id for a branch; uses TanStack Query cache when primed. */
