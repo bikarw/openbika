@@ -25,6 +25,7 @@ import {
   type CreateProjectRequest,
   type CreateRestoreRequest,
   type CreateS3DestinationRequest,
+  type CreateDraftWorkloadRequest,
   type CreateWorkloadRequest,
   type DatabaseResponse,
   databaseResponseSchema,
@@ -45,6 +46,7 @@ import {
   type PatchGiteaProviderRequest,
   type PatchGithubProviderRequest,
   type PatchGitlabProviderRequest,
+  type PatchWorkloadConfigRequest,
   type PatchS3DestinationRequest,
   type ProjectResponse,
   type PatchWorkloadEnvRequest,
@@ -637,6 +639,13 @@ export class OpenbikaClient {
     });
   }
 
+  async createDraftWorkload(
+    projectId: string,
+    input: CreateDraftWorkloadRequest,
+  ): Promise<WorkloadResponse> {
+    return this.createWorkload(projectId, input);
+  }
+
   async getWorkload(workloadId: string): Promise<WorkloadResponse> {
     return this.request({
       parse: (body) =>
@@ -674,6 +683,19 @@ export class OpenbikaClient {
     });
   }
 
+  async patchWorkloadConfig(
+    workloadId: string,
+    input: PatchWorkloadConfigRequest,
+  ): Promise<WorkloadResponse> {
+    return this.request({
+      body: input,
+      method: "PATCH",
+      parse: (body) =>
+        workloadResponseSchema.parse(readProperty(body, "workload")),
+      path: `/v1/workloads/${encodeURIComponent(workloadId)}/config`,
+    });
+  }
+
   async patchWorkloadDomains(
     workloadId: string,
     input: PatchWorkloadIngressDomainsRequest,
@@ -693,6 +715,15 @@ export class OpenbikaClient {
       parse: (body) =>
         workloadResponseSchema.parse(readProperty(body, "workload")),
       path: `/v1/workloads/${encodeURIComponent(workloadId)}/rebuild`,
+    });
+  }
+
+  async deployWorkload(workloadId: string): Promise<WorkloadResponse> {
+    return this.request({
+      method: "POST",
+      parse: (body) =>
+        workloadResponseSchema.parse(readProperty(body, "workload")),
+      path: `/v1/workloads/${encodeURIComponent(workloadId)}/deploy`,
     });
   }
 

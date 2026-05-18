@@ -267,10 +267,15 @@ export const databaseResponseSchema = z.object({
 });
 export type DatabaseResponse = z.infer<typeof databaseResponseSchema>;
 
-export const workloadKindSchema = z.enum(["container", "function"]);
+export const workloadKindSchema = z.enum([
+  "unconfigured",
+  "container",
+  "function",
+]);
 export type WorkloadKind = z.infer<typeof workloadKindSchema>;
 
 export const workloadStatusSchema = z.enum([
+  "draft",
   "requested",
   "provisioning",
   "available",
@@ -280,6 +285,14 @@ export const workloadStatusSchema = z.enum([
   "deleted",
 ]);
 export type WorkloadStatus = z.infer<typeof workloadStatusSchema>;
+
+export const gitProviderTypeSchema = z.enum([
+  "github",
+  "gitlab",
+  "bitbucket",
+  "gitea",
+]);
+export type GitProviderType = z.infer<typeof gitProviderTypeSchema>;
 
 export const workloadResponseSchema = z.object({
   createdAt: z.string(),
@@ -312,13 +325,45 @@ export type WorkloadRuntimeLogsResponse = z.infer<
 
 const workloadNameSchema = z.string().min(1).max(63);
 
-export const createContainerWorkloadRequestSchema = z.object({
-  build: z
-    .object({
-      contextUri: z.string().min(1).optional(),
-      dockerfilePath: z.string().min(1).optional(),
-    })
+export const createDraftWorkloadRequestSchema = z.object({
+  name: workloadNameSchema,
+});
+export type CreateDraftWorkloadRequest = z.infer<
+  typeof createDraftWorkloadRequestSchema
+>;
+
+const workloadDockerBuildSchema = z.object({
+  contextUri: z.string().min(1).optional(),
+  dockerfilePath: z.string().min(1).optional(),
+  source: z
+    .discriminatedUnion("type", [
+      z.object({
+        type: z.literal("local"),
+      }),
+      z.object({
+        gitProviderId: idSchema,
+        path: z.string().min(1).max(512).optional(),
+        providerType: gitProviderTypeSchema,
+        ref: z.string().min(1).max(255).optional(),
+        repositoryFullName: z.string().min(1).max(512),
+        repositoryId: z.union([z.string(), z.number()]).optional(),
+        repositoryUrl: z.string().min(1).max(2048).optional(),
+        type: z.literal("gitProvider"),
+      }),
+      z.object({
+        path: z.string().min(1).max(512).optional(),
+        ref: z.string().min(1).max(255).optional(),
+        repositoryUrl: z.string().min(1).max(2048),
+        type: z.literal("git"),
+      }),
+    ])
     .optional(),
+});
+export type WorkloadDockerBuild = z.infer<typeof workloadDockerBuildSchema>;
+
+export const createContainerWorkloadRequestSchema = z.object({
+  autoDeploy: z.boolean().optional(),
+  build: workloadDockerBuildSchema.optional(),
   env: z.record(z.string(), z.string()).optional(),
   image: z.string().min(1).optional(),
   kind: z.literal("container"),
@@ -347,10 +392,22 @@ export const functionSourceSchema = z.discriminatedUnion("type", [
     repositoryUrl: z.string().min(1).max(2048),
     type: z.literal("git"),
   }),
+  z.object({
+    gitProviderId: idSchema,
+    path: z.string().min(1).max(512).optional(),
+    providerType: gitProviderTypeSchema,
+    ref: z.string().min(1).max(255).optional(),
+    repositoryFullName: z.string().min(1).max(512),
+    repositoryId: z.union([z.string(), z.number()]).optional(),
+    repositoryUrl: z.string().min(1).max(2048).optional(),
+    type: z.literal("gitProvider"),
+  }),
 ]);
 export type FunctionSource = z.infer<typeof functionSourceSchema>;
 
 export const createFunctionWorkloadRequestSchema = z.object({
+  autoDeploy: z.boolean().optional(),
+  build: workloadDockerBuildSchema.optional(),
   entrypoint: z.string().min(1).default("index.ts"),
   env: z.record(z.string(), z.string()).optional(),
   kind: z.literal("function"),
@@ -362,7 +419,7 @@ export type CreateFunctionWorkloadRequest = z.infer<
   typeof createFunctionWorkloadRequestSchema
 >;
 
-export const createWorkloadRequestSchema = z
+export const configuredWorkloadRequestSchema = z
   .discriminatedUnion("kind", [
     createContainerWorkloadRequestSchema,
     createFunctionWorkloadRequestSchema,
@@ -387,7 +444,54 @@ export const createWorkloadRequestSchema = z
       });
     }
   });
+export type ConfiguredWorkloadRequest = z.infer<
+  typeof configuredWorkloadRequestSchema
+>;
+
+export const createWorkloadRequestSchema = z.union([
+  createDraftWorkloadRequestSchema,
+  configuredWorkloadRequestSchema,
+]);
 export type CreateWorkloadRequest = z.infer<typeof createWorkloadRequestSchema>;
+
+export const patchContainerWorkloadConfigRequestSchema =
+  createContainerWorkloadRequestSchema
+    .omit({ name: true })
+    .extend({ name: workloadNameSchema.optional() });
+export const patchFunctionWorkloadConfigRequestSchema =
+  createFunctionWorkloadRequestSchema
+    .omit({ name: true })
+    .extend({ name: workloadNameSchema.optional() });
+
+export const patchWorkloadConfigRequestSchema = z
+  .discriminatedUnion("kind", [
+    patchContainerWorkloadConfigRequestSchema,
+    patchFunctionWorkloadConfigRequestSchema,
+  ])
+  .superRefine((value, ctx) => {
+    if (value.kind !== "container") {
+      return;
+    }
+
+    const hasImage = value.image !== undefined && value.image.length > 0;
+    const hasBuild =
+      value.build !== undefined &&
+      (value.build.dockerfilePath !== undefined ||
+        value.build.contextUri !== undefined ||
+        value.build.source !== undefined);
+
+    if (!hasImage && !hasBuild) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Container workload requires an image, or build context / Dockerfile metadata in build",
+        path: ["image"],
+      });
+    }
+  });
+export type PatchWorkloadConfigRequest = z.infer<
+  typeof patchWorkloadConfigRequestSchema
+>;
 
 export const patchWorkloadEnvRequestSchema = z.object({
   env: z.record(z.string(), z.string()),
@@ -959,7 +1063,9 @@ export const cronExpressionSchema = z
   .min(1)
   .max(200)
   .refine(
-    (value) => /^[\dA-Z*,/\-? ]+$/u.test(value) && value.trim().split(/\s+/u).length === 5,
+    (value) =>
+      /^[\dA-Z*,/\-? ]+$/u.test(value) &&
+      value.trim().split(/\s+/u).length === 5,
     {
       message: "Cron expression must have 5 fields (minute hour dom month dow)",
     },
@@ -1027,10 +1133,7 @@ export type PatchBackupScheduleRequest = z.infer<
   typeof patchBackupScheduleRequestSchema
 >;
 
-export const restoreModeSchema = z.enum([
-  "new_branch",
-  "overwrite_existing",
-]);
+export const restoreModeSchema = z.enum(["new_branch", "overwrite_existing"]);
 export type RestoreMode = z.infer<typeof restoreModeSchema>;
 
 export const createRestoreRequestSchema = z
@@ -1185,21 +1288,11 @@ export const s3DestinationResponseSchema = z.object({
   region: z.string(),
   updatedAt: z.string(),
 });
-export type S3DestinationResponse = z.infer<
-  typeof s3DestinationResponseSchema
->;
+export type S3DestinationResponse = z.infer<typeof s3DestinationResponseSchema>;
 
 // ============================================================================
 // Git providers
 // ============================================================================
-
-export const gitProviderTypeSchema = z.enum([
-  "github",
-  "gitlab",
-  "bitbucket",
-  "gitea",
-]);
-export type GitProviderType = z.infer<typeof gitProviderTypeSchema>;
 
 const httpUrlSchema = z
   .string()
@@ -1271,18 +1364,18 @@ export const gitProviderResponseSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   details: z.union([
-    z.object({ providerType: z.literal("github") }).merge(
-      githubProviderDetailsSchema,
-    ),
-    z.object({ providerType: z.literal("gitlab") }).merge(
-      gitlabProviderDetailsSchema,
-    ),
-    z.object({ providerType: z.literal("bitbucket") }).merge(
-      bitbucketProviderDetailsSchema,
-    ),
-    z.object({ providerType: z.literal("gitea") }).merge(
-      giteaProviderDetailsSchema,
-    ),
+    z
+      .object({ providerType: z.literal("github") })
+      .merge(githubProviderDetailsSchema),
+    z
+      .object({ providerType: z.literal("gitlab") })
+      .merge(gitlabProviderDetailsSchema),
+    z
+      .object({ providerType: z.literal("bitbucket") })
+      .merge(bitbucketProviderDetailsSchema),
+    z
+      .object({ providerType: z.literal("gitea") })
+      .merge(giteaProviderDetailsSchema),
   ]),
 });
 export type GitProviderResponse = z.infer<typeof gitProviderResponseSchema>;
@@ -1307,8 +1400,7 @@ export const prepareGithubManifestRequestSchema = z
       (value.organizationName !== undefined &&
         value.organizationName.trim().length > 0),
     {
-      message:
-        "organizationName is required when isOrganization is true",
+      message: "organizationName is required when isOrganization is true",
       path: ["organizationName"],
     },
   );

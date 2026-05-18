@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   branchQueryResponseSchema,
   branchSchemaResponseSchema,
+  createWorkloadRequestSchema,
   executeBranchQueryRequestSchema,
+  patchWorkloadConfigRequestSchema,
+  workloadStatusSchema,
 } from "@openbika/contracts";
 
 import { createApi } from "./app.js";
@@ -120,6 +123,44 @@ describe("api", () => {
     ).toMatchObject({
       command: "SELECT",
       rows: [{ id: 1 }],
+    });
+  });
+
+  it("parses draft and configured workload contract shapes", () => {
+    expect(createWorkloadRequestSchema.parse({ name: "api" })).toEqual({
+      name: "api",
+    });
+
+    expect(workloadStatusSchema.parse("draft")).toBe("draft");
+
+    expect(
+      patchWorkloadConfigRequestSchema.parse({
+        autoDeploy: false,
+        build: {
+          contextUri: ".",
+          dockerfilePath: "Dockerfile",
+          source: {
+            gitProviderId: "git_provider_123",
+            providerType: "github",
+            ref: "main",
+            repositoryFullName: "acme/api",
+            repositoryUrl: "https://github.com/acme/api",
+            type: "gitProvider",
+          },
+        },
+        kind: "container",
+        ports: [3000],
+      }),
+    ).toMatchObject({
+      build: {
+        source: {
+          providerType: "github",
+          repositoryFullName: "acme/api",
+          type: "gitProvider",
+        },
+      },
+      kind: "container",
+      autoDeploy: false,
     });
   });
 });

@@ -1,12 +1,11 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import {
   type CreateWorkloadRequest,
-  type FunctionRuntime,
   readObservedWorkloadIngressRoutes,
   type WorkloadResponse,
 } from "@openbika/contracts";
 import { Badge } from "@openbika/ui/components/badge";
-import { Button, buttonVariants } from "@openbika/ui/components/button";
+import { Button } from "@openbika/ui/components/button";
 import {
   Card,
   CardContent,
@@ -14,36 +13,24 @@ import {
   CardHeader,
   CardTitle,
 } from "@openbika/ui/components/card";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from "@openbika/ui/components/dropdown-menu";
 import { Input } from "@openbika/ui/components/input";
 import { cn } from "@openbika/ui/lib/utils";
 import {
   AlertCircle,
   Boxes,
-  ChevronsUpDown,
-  Code2,
   Container,
-  FolderArchive,
   Plus,
   Workflow,
   X,
 } from "lucide-react";
 import * as React from "react";
 
-import { parseEnvText } from "#/lib/env-text";
-
-const MAX_BUNDLE_FILE_BYTES = 4 * 1024 * 1024;
-
 type WorkloadStatusTone = "neutral" | "ok" | "warn" | "fail";
 type WorkloadKind = WorkloadResponse["kind"];
 
-type CreateWorkloadHandler = (input: CreateWorkloadRequest) => Promise<void>;
+type CreateWorkloadHandler = (
+  input: CreateWorkloadRequest,
+) => Promise<WorkloadResponse>;
 
 interface WorkloadsPanelProps {
   errorMessage: string | null;
@@ -57,6 +44,8 @@ interface WorkloadsPanelProps {
 
 export function workloadKindLabel(kind: WorkloadKind): string {
   switch (kind) {
+    case "unconfigured":
+      return "Unconfigured";
     case "container":
       return "Container";
     case "function":
@@ -78,6 +67,7 @@ export function workloadStatusTone(
   switch (status) {
     case "available":
       return "ok";
+    case "draft":
     case "requested":
     case "provisioning":
     case "maintenance":
@@ -136,6 +126,7 @@ export function WorkloadsPanel({
         <div className="flex justify-end">
           <CreateWorkloadModal
             existingNames={workloads.map((w) => w.name)}
+            navigation={navigation}
             onCreateWorkload={onCreateWorkload}
           />
         </div>
@@ -162,6 +153,7 @@ export function WorkloadsPanel({
             </div>
             <CreateWorkloadModal
               existingNames={workloads.map((w) => w.name)}
+              navigation={navigation}
               onCreateWorkload={onCreateWorkload}
               triggerLabel="Add your first workload"
             />
@@ -225,7 +217,7 @@ function WorkloadCard({
                 : "—"
             }
           />
-        ) : (
+        ) : workload.kind === "function" ? (
           <KeyValueRow
             label="Runtime"
             value={
@@ -234,6 +226,8 @@ function WorkloadCard({
                 : "—"
             }
           />
+        ) : (
+          <KeyValueRow label="Status" value="Ready to configure" />
         )}
         {error ? (
           <p className="text-destructive flex items-start gap-1.5 text-xs leading-snug">
@@ -311,57 +305,28 @@ export function StatusDot({
 
 interface CreateWorkloadModalProps {
   existingNames: string[];
+  navigation?: {
+    organizationSlug: string;
+    projectSlug: string;
+  };
   onCreateWorkload: CreateWorkloadHandler;
   triggerLabel?: string;
 }
 
 function CreateWorkloadModal({
   existingNames,
+  navigation,
   onCreateWorkload,
   triggerLabel = "New workload",
 }: CreateWorkloadModalProps) {
+  const navigate = useNavigate();
   const [open, setOpen] = React.useState(false);
-  const [kind, setKind] = React.useState<WorkloadKind>("container");
   const [name, setName] = React.useState("");
-  const [image, setImage] = React.useState("");
-  const [portsText, setPortsText] = React.useState("");
-  const [envText, setEnvText] = React.useState("");
-  const [runtime, setRuntime] = React.useState<FunctionRuntime>("bun");
-  const [entrypoint, setEntrypoint] = React.useState("index.ts");
-  const [sourceType, setSourceType] = React.useState<
-    "git" | "image" | "bundle"
-  >("git");
-  const [repositoryUrl, setRepositoryUrl] = React.useState("");
-  const [gitRef, setGitRef] = React.useState("");
-  const [gitPath, setGitPath] = React.useState("");
-  const [imageRef, setImageRef] = React.useState("");
-  const [artifactUriText, setArtifactUriText] = React.useState("");
-  const [bundleFromDevice, setBundleFromDevice] = React.useState<{
-    dataUrl: string;
-    filename: string;
-  } | null>(null);
-  const bundleFileInputRef = React.useRef<HTMLInputElement>(null);
   const [submitting, setSubmitting] = React.useState(false);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
 
   function reset() {
-    setKind("container");
     setName("");
-    setImage("");
-    setPortsText("");
-    setEnvText("");
-    setRuntime("bun");
-    setEntrypoint("index.ts");
-    setSourceType("git");
-    setRepositoryUrl("");
-    setGitRef("");
-    setGitPath("");
-    setImageRef("");
-    setArtifactUriText("");
-    setBundleFromDevice(null);
-    if (bundleFileInputRef.current) {
-      bundleFileInputRef.current.value = "";
-    }
     setErrorMessage(null);
   }
 
@@ -369,24 +334,6 @@ function CreateWorkloadModal({
     if (submitting) return;
     setOpen(false);
     reset();
-  }
-
-  function parsePorts(): number[] | undefined {
-    const trimmed = portsText.trim();
-    if (!trimmed) return undefined;
-
-    const tokens = trimmed.split(/[,\s]+/u).filter(Boolean);
-    const numbers: number[] = [];
-
-    for (const token of tokens) {
-      const value = Number(token);
-      if (!Number.isInteger(value) || value < 1 || value > 65535) {
-        throw new Error(`Invalid port: ${token}`);
-      }
-      numbers.push(value);
-    }
-
-    return numbers.length > 0 ? numbers : undefined;
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -407,83 +354,19 @@ function CreateWorkloadModal({
     setErrorMessage(null);
 
     try {
-      const ports = parsePorts();
-      let env: Record<string, string> | undefined;
-      const envTrimmed = envText.trim();
-      if (envTrimmed) {
-        env = parseEnvText(envText);
-        if (Object.keys(env).length === 0) {
-          env = undefined;
-        }
-      }
-      let payload: CreateWorkloadRequest;
-
-      if (kind === "container") {
-        const trimmedImage = image.trim();
-        if (!trimmedImage) {
-          throw new Error("Container workload requires an image reference.");
-        }
-
-        payload = {
-          env,
-          image: trimmedImage,
-          kind: "container",
-          name: trimmedName,
-          ports,
-        };
-      } else {
-        const source = (() => {
-          if (sourceType === "git") {
-            const trimmedRepo = repositoryUrl.trim();
-            if (!trimmedRepo) {
-              throw new Error(
-                "Git source requires a repository URL.",
-              );
-            }
-            return {
-              path: gitPath.trim() || undefined,
-              ref: gitRef.trim() || undefined,
-              repositoryUrl: trimmedRepo,
-              type: "git" as const,
-            };
-          }
-
-          if (sourceType === "image") {
-            const trimmed = imageRef.trim();
-            if (!trimmed) {
-              throw new Error("Image source requires an image reference.");
-            }
-            return { image: trimmed, type: "image" as const };
-          }
-
-          if (bundleFromDevice?.dataUrl) {
-            return {
-              artifactUri: bundleFromDevice.dataUrl,
-              type: "bundle" as const,
-            };
-          }
-          const trimmed = artifactUriText.trim();
-          if (!trimmed) {
-            throw new Error(
-              "Bundle source requires an artifact URI or a zip/tar file from this device.",
-            );
-          }
-          return { artifactUri: trimmed, type: "bundle" as const };
-        })();
-
-        payload = {
-          entrypoint: entrypoint.trim() || "index.ts",
-          env,
-          kind: "function",
-          name: trimmedName,
-          runtime,
-          source,
-        };
-      }
-
-      await onCreateWorkload(payload);
+      const created = await onCreateWorkload({ name: trimmedName });
       setOpen(false);
       reset();
+      if (navigation) {
+        await navigate({
+          params: {
+            organizationSlug: navigation.organizationSlug,
+            projectSlug: navigation.projectSlug,
+            workloadId: created.id,
+          },
+          to: "/$organizationSlug/projects/$projectSlug/workloads/$workloadId",
+        });
+      }
     } catch (err) {
       setErrorMessage(
         err instanceof Error ? err.message : "Failed to create workload",
@@ -516,7 +399,8 @@ function CreateWorkloadModal({
                   Create workload
                 </h2>
                 <p className="text-muted-foreground text-sm">
-                  Add a container or function service to this project.
+                  Name it now, then configure source, runtime, and deploy from
+                  its overview page.
                 </p>
               </div>
               <Button
@@ -532,23 +416,6 @@ function CreateWorkloadModal({
             </div>
 
             <div className="flex-1 space-y-5 overflow-y-auto p-4">
-              <div className="grid grid-cols-2 gap-2">
-                <KindCard
-                  active={kind === "container"}
-                  description="Long-running image (Redis, Nginx)"
-                  icon={<Container className="size-4" />}
-                  label="Container"
-                  onClick={() => setKind("container")}
-                />
-                <KindCard
-                  active={kind === "function"}
-                  description="Bun or Node serverless handler"
-                  icon={<Workflow className="size-4" />}
-                  label="Function"
-                  onClick={() => setKind("function")}
-                />
-              </div>
-
               <div className="space-y-2">
                 <label className="text-sm font-medium" htmlFor="workload-name">
                   Workload name
@@ -557,220 +424,8 @@ function CreateWorkloadModal({
                   autoFocus
                   id="workload-name"
                   onChange={(event) => setName(event.target.value)}
-                  placeholder={kind === "container" ? "redis" : "api"}
+                  placeholder="api"
                   value={name}
-                />
-              </div>
-
-              {kind === "container" ? (
-                <>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium" htmlFor="image">
-                      Image
-                    </label>
-                    <Input
-                      id="image"
-                      onChange={(event) => setImage(event.target.value)}
-                      placeholder="docker.io/redis:7"
-                      value={image}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium" htmlFor="ports">
-                      Ports
-                      <span className="text-muted-foreground font-normal">
-                        {" "}
-                        (comma or space separated)
-                      </span>
-                    </label>
-                    <Input
-                      id="ports"
-                      onChange={(event) => setPortsText(event.target.value)}
-                      placeholder="6379"
-                      value={portsText}
-                    />
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium">Runtime</p>
-                    <RuntimePicker runtime={runtime} setRuntime={setRuntime} />
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium" htmlFor="entrypoint">
-                      Entrypoint
-                    </label>
-                    <Input
-                      id="entrypoint"
-                      onChange={(event) => setEntrypoint(event.target.value)}
-                      placeholder="index.ts"
-                      value={entrypoint}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium">Source</p>
-                    <SourceTypePicker
-                      setSourceType={setSourceType}
-                      sourceType={sourceType}
-                    />
-
-                    {sourceType === "git" ? (
-                      <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
-                        <Input
-                          onChange={(event) =>
-                            setRepositoryUrl(event.target.value)
-                          }
-                          placeholder="https://github.com/org/repo"
-                          value={repositoryUrl}
-                        />
-                        <div className="grid grid-cols-2 gap-2">
-                          <Input
-                            onChange={(event) => setGitRef(event.target.value)}
-                            placeholder="ref (branch / sha)"
-                            value={gitRef}
-                          />
-                          <Input
-                            onChange={(event) => setGitPath(event.target.value)}
-                            placeholder="path (optional)"
-                            value={gitPath}
-                          />
-                        </div>
-                      </div>
-                    ) : sourceType === "image" ? (
-                      <Input
-                        onChange={(event) => setImageRef(event.target.value)}
-                        placeholder="ghcr.io/org/image:tag"
-                        value={imageRef}
-                      />
-                    ) : (
-                      <div className="space-y-2">
-                        <input
-                          accept=".zip,.tar,.tgz,.gz,application/x-tar,application/gzip,application/zip"
-                          aria-label="Choose bundle zip or tar file"
-                          className="sr-only size-0 overflow-hidden border-0 p-0"
-                          onChange={(event) => {
-                            const input = event.currentTarget;
-                            const file = input.files?.[0];
-                            if (!file) {
-                              return;
-                            }
-                            input.value = "";
-                            if (file.size > MAX_BUNDLE_FILE_BYTES) {
-                              const mb = MAX_BUNDLE_FILE_BYTES / (1024 * 1024);
-                              setErrorMessage(
-                                `Choose a bundle of ${mb} MB or smaller, or paste an artifact URI instead.`,
-                              );
-                              return;
-                            }
-                            const reader = new FileReader();
-                            reader.onload = () => {
-                              const data = reader.result;
-                              if (typeof data !== "string") {
-                                setErrorMessage(
-                                  "Could not read the selected file.",
-                                );
-                                return;
-                              }
-                              setErrorMessage(null);
-                              setArtifactUriText("");
-                              setBundleFromDevice({
-                                dataUrl: data,
-                                filename: file.name,
-                              });
-                            };
-                            reader.onerror = () => {
-                              setErrorMessage(
-                                "Could not read the selected file.",
-                              );
-                            };
-                            reader.readAsDataURL(file);
-                          }}
-                          ref={bundleFileInputRef}
-                          tabIndex={-1}
-                          type="file"
-                        />
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-                          <Input
-                            className="min-w-0 flex-1"
-                            disabled={bundleFromDevice !== null}
-                            id="artifact-uri"
-                            onChange={(event) => {
-                              setArtifactUriText(event.target.value);
-                              setBundleFromDevice(null);
-                            }}
-                            placeholder="s3://bucket/bundle.zip"
-                            value={artifactUriText}
-                          />
-                          <div className="flex shrink-0 gap-2">
-                            {bundleFromDevice ? (
-                              <Button
-                                className="shrink-0"
-                                disabled={submitting}
-                                onClick={() => {
-                                  setBundleFromDevice(null);
-                                  if (bundleFileInputRef.current) {
-                                    bundleFileInputRef.current.value = "";
-                                  }
-                                }}
-                                type="button"
-                                variant="outline"
-                              >
-                                Clear file
-                              </Button>
-                            ) : null}
-                            <Button
-                              className="inline-flex shrink-0 items-center gap-2"
-                              disabled={submitting}
-                              onClick={() =>
-                                bundleFileInputRef.current?.click()
-                              }
-                              type="button"
-                              variant="outline"
-                            >
-                              <FolderArchive className="size-4 shrink-0" />
-                              Choose file…
-                            </Button>
-                          </div>
-                        </div>
-                        <p className="text-muted-foreground text-xs">
-                          Paste an artifact URI, or attach a zip/tar from this
-                          device (up to {MAX_BUNDLE_FILE_BYTES / (1024 * 1024)}{" "}
-                          MB).
-                        </p>
-                        {bundleFromDevice ? (
-                          <p className="text-muted-foreground text-xs">
-                            Using local file:{" "}
-                            <span className="break-all font-mono text-foreground">
-                              {bundleFromDevice.filename}
-                            </span>
-                          </p>
-                        ) : null}
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="env">
-                  Environment variables
-                  <span className="text-muted-foreground font-normal">
-                    {" "}
-                    (KEY=value per line)
-                  </span>
-                </label>
-                <textarea
-                  className={cn(
-                    "min-h-[96px] w-full rounded-md border border-border bg-background p-2 font-mono text-sm",
-                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  )}
-                  id="env"
-                  onChange={(event) => setEnvText(event.target.value)}
-                  placeholder="LOG_LEVEL=info"
-                  value={envText}
                 />
               </div>
 
@@ -801,120 +456,3 @@ function CreateWorkloadModal({
   );
 }
 
-function KindCard({
-  active,
-  description,
-  icon,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  description: string;
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      className={cn(
-        "flex flex-col items-start gap-1 rounded-md border p-3 text-left transition-colors",
-        active
-          ? "border-primary bg-primary/5"
-          : "border-border bg-background hover:bg-accent/50",
-      )}
-      onClick={onClick}
-      type="button"
-    >
-      <div className="flex items-center gap-2 text-sm font-medium">
-        {icon}
-        {label}
-      </div>
-      <p className="text-muted-foreground text-xs">{description}</p>
-    </button>
-  );
-}
-
-function RuntimePicker({
-  runtime,
-  setRuntime,
-}: {
-  runtime: FunctionRuntime;
-  setRuntime: (next: FunctionRuntime) => void;
-}) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        className={cn(
-          buttonVariants({ variant: "outline" }),
-          "w-full justify-start",
-        )}
-      >
-        <Code2 className="size-4" />
-        <span className="truncate">{runtime}</span>
-        <ChevronsUpDown className="ml-auto size-4 shrink-0 opacity-60" />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-56">
-        <DropdownMenuLabel className="text-muted-foreground text-xs">
-          Function runtime
-        </DropdownMenuLabel>
-        {(["bun", "node"] as const).map((option) => (
-          <DropdownMenuItem
-            className="gap-2 p-2"
-            key={option}
-            onClick={() => setRuntime(option)}
-          >
-            <Code2 className="size-4 opacity-70" />
-            {option}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-function SourceTypePicker({
-  setSourceType,
-  sourceType,
-}: {
-  setSourceType: (next: "git" | "image" | "bundle") => void;
-  sourceType: "git" | "image" | "bundle";
-}) {
-  const options = [
-    { description: "Pull from a Git repository", value: "git" as const },
-    { description: "Pre-built container image", value: "image" as const },
-    { description: "Uploaded artifact (zip/tar)", value: "bundle" as const },
-  ];
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        className={cn(
-          buttonVariants({ variant: "outline" }),
-          "w-full justify-start",
-        )}
-      >
-        <span className="capitalize">{sourceType}</span>
-        <ChevronsUpDown className="ml-auto size-4 shrink-0 opacity-60" />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-72">
-        <DropdownMenuLabel className="text-muted-foreground text-xs">
-          Source
-        </DropdownMenuLabel>
-        {options.map((option) => (
-          <DropdownMenuItem
-            className="gap-2 p-2"
-            key={option.value}
-            onClick={() => setSourceType(option.value)}
-          >
-            <div className="flex min-w-0 flex-col">
-              <span className="font-medium capitalize">{option.value}</span>
-              <span className="text-muted-foreground text-xs">
-                {option.description}
-              </span>
-            </div>
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}

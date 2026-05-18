@@ -17,6 +17,7 @@ import {
   createRestoreRequestSchema,
   createS3DestinationRequestSchema,
   createWorkloadRequestSchema,
+  patchWorkloadConfigRequestSchema,
   dedupeWorkloadIngressDomains,
   executeBranchQueryRequestSchema,
   normalizeIngressFreeDnsZone,
@@ -41,6 +42,7 @@ import {
   type BranchExpirationTtl,
   type BranchResponse,
   type BranchSchemaTableResponse,
+  type ConfiguredWorkloadRequest,
   type DatabaseResponse,
   type GitProviderResponse,
   type ProvisionWorkloadInput,
@@ -59,6 +61,7 @@ import { and, desc, eq, inArray, lte } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import slugify from "@sindresorhus/slugify";
 import type { z } from "zod";
@@ -102,12 +105,6 @@ const projectSlugConflictConstraint = "projects_organization_slug_idx";
 const workloadNameConflictConstraint = "project_workloads_project_name_idx";
 const readOnlySqlTokens = new Set(["explain", "select", "show", "with"]);
 const systemSchemas = ["information_schema", "pg_catalog"];
-
-interface BranchConnectionDetails {
-  databaseName: string;
-  password: string;
-  username: string;
-}
 
 interface BranchRuntimeConnectionDetails {
   connectionString: string;
@@ -1253,13 +1250,12 @@ function readJsonRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-type CreateWorkloadBody = z.infer<typeof createWorkloadRequestSchema>;
-
 function buildWorkloadDesiredState(
-  input: CreateWorkloadBody,
+  input: ConfiguredWorkloadRequest,
 ): Record<string, unknown> {
   if (input.kind === "container") {
     const out: Record<string, unknown> = {
+      autoDeploy: input.autoDeploy,
       build: input.build,
       image: input.image,
       ports: input.ports,
@@ -1274,6 +1270,8 @@ function buildWorkloadDesiredState(
   }
 
   const out: Record<string, unknown> = {
+    autoDeploy: input.autoDeploy,
+    build: input.build,
     entrypoint: input.entrypoint,
     runtime: input.runtime,
     source: input.source,
@@ -1399,6 +1397,157 @@ async function startWorkloadProvisioning({
       message: failureMessage,
     });
   }
+}
+
+function assertDeployableWorkload(
+  workload: Pick<SerializableWorkload, "desiredState" | "kind" | "status">,
+): asserts workload is Pick<
+  SerializableWorkload,
+  "desiredState" | "kind" | "status"
+> & { kind: "container" | "function" } {
+  if (workload.kind !== "container" && workload.kind !== "function") {
+    throw new HTTPException(400, {
+      message: "Configure this workload before deploying it.",
+    });
+  }
+
+  const parsed = patchWorkloadConfigRequestSchema.safeParse({
+    ...readJsonRecord(workload.desiredState),
+    kind: workload.kind,
+  });
+
+  if (!parsed.success) {
+    throw new HTTPException(400, {
+      message: "Workload configuration is incomplete.",
+    });
+  }
+}
+
+async function loadWorkloadOrThrow(
+  db: ControlPlaneDb,
+  workloadId: string,
+): Promise<SerializableWorkload> {
+  const workload = first(
+    await db
+      .select()
+      .from(schema.projectWorkloads)
+      .where(eq(schema.projectWorkloads.id, workloadId))
+      .limit(1),
+  );
+
+  if (!workload) {
+    throw new HTTPException(500, {
+      message: "Workload metadata could not be loaded",
+    });
+  }
+
+  return workload;
+}
+
+function verifyGithubWebhookSignature({
+  body,
+  secret,
+  signature,
+}: {
+  body: string;
+  secret: string;
+  signature: string | null;
+}): boolean {
+  if (!signature?.startsWith("sha256=")) {
+    return false;
+  }
+  const expected = `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+  const actualBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  return (
+    actualBuffer.length === expectedBuffer.length &&
+    timingSafeEqual(actualBuffer, expectedBuffer)
+  );
+}
+
+function readWorkloadGitProviderSource(
+  desiredState: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const build = readJsonRecord(desiredState.build);
+  const buildSource = readJsonRecord(build.source);
+  if (buildSource.type === "gitProvider") {
+    return buildSource;
+  }
+
+  const source = readJsonRecord(desiredState.source);
+  return source.type === "gitProvider" ? source : null;
+}
+
+function workloadMatchesGithubPush(input: {
+  branch: string | null;
+  gitProviderId: string;
+  repositoryFullName: string;
+  workload: SerializableWorkload;
+}): boolean {
+  if (
+    input.workload.kind !== "container" &&
+    input.workload.kind !== "function"
+  ) {
+    return false;
+  }
+
+  const desired = readJsonRecord(input.workload.desiredState);
+  if (desired.autoDeploy === false) {
+    return false;
+  }
+
+  const source = readWorkloadGitProviderSource(desired);
+  if (source === null) {
+    return false;
+  }
+
+  if (source.providerType !== "github") {
+    return false;
+  }
+
+  if (source.gitProviderId !== input.gitProviderId) {
+    return false;
+  }
+
+  if (source.repositoryFullName !== input.repositoryFullName) {
+    return false;
+  }
+
+  const configuredRef =
+    typeof source.ref === "string" && source.ref.trim().length > 0
+      ? source.ref.trim()
+      : null;
+  return (
+    configuredRef === null ||
+    input.branch === null ||
+    configuredRef === input.branch
+  );
+}
+
+async function deployWorkloadFromWebhook(input: {
+  db: ControlPlaneDb;
+  env: ApiEnv;
+  workload: SerializableWorkload;
+}): Promise<void> {
+  const desiredState = readJsonRecord(input.workload.desiredState);
+
+  await input.db
+    .update(schema.projectWorkloads)
+    .set({
+      status: "provisioning",
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.projectWorkloads.id, input.workload.id));
+
+  await startWorkloadProvisioning({
+    db: input.db,
+    desiredState,
+    env: input.env,
+    failureMessage:
+      "Git webhook was received, but the provisioning workflow could not be started.",
+    workload: input.workload,
+    workflowId: `provision-workload-${input.workload.id}-webhook-${generateULID()}`,
+  });
 }
 
 export function createV1Routes({ env }: CreateV1RoutesOptions) {
@@ -1865,9 +2014,8 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
     // internet. If API_PUBLIC_URL is localhost, omit hook_attributes entirely
     // — apps without webhooks are valid, and the user can edit the manifest
     // in the dashboard to add a tunnel URL later.
-    const isLocalApiBase = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|\/|$)/iu.test(
-      apiBase,
-    );
+    const isLocalApiBase =
+      /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|\/|$)/iu.test(apiBase);
     const manifestObject: Record<string, unknown> = {
       name: `OpenBika-${isoDay}-${randomSuffix}`,
       url: env.WEB_ORIGIN,
@@ -1882,8 +2030,7 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
         pull_requests: "write",
       },
     };
-    const includeWebhookHook =
-      !isLocalApiBase && webhookUrl.length > 0;
+    const includeWebhookHook = !isLocalApiBase && webhookUrl.length > 0;
     // GitHub requires a non-empty hook URL whenever default_events subscribes
     // to repository events — otherwise registration fails (“Hook url cannot be
     // blank”). Either ship hook_attributes + events together, or neither.
@@ -1959,27 +2106,24 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
     return c.json(result);
   });
 
-  routes.get(
-    "/git-providers/github/:gitProviderId/repositories",
-    async (c) => {
-      const user = requireUser(c);
-      const db = c.get("db");
-      const gitProviderId = c.req.param("gitProviderId");
+  routes.get("/git-providers/github/:gitProviderId/repositories", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const gitProviderId = c.req.param("gitProviderId");
 
-      const loaded = await loadGitProviderRow(db, gitProviderId);
-      if (loaded.parent.providerType !== "github" || !loaded.github) {
-        throw new HTTPException(400, { message: "Not a GitHub provider" });
-      }
-      await assertOrganizationAccess({
-        db,
-        organizationId: loaded.parent.organizationId,
-        userId: user.id,
-      });
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    if (loaded.parent.providerType !== "github" || !loaded.github) {
+      throw new HTTPException(400, { message: "Not a GitHub provider" });
+    }
+    await assertOrganizationAccess({
+      db,
+      organizationId: loaded.parent.organizationId,
+      userId: user.id,
+    });
 
-      const repositories = await listGithubRepositories(loaded.github);
-      return c.json({ repositories });
-    },
-  );
+    const repositories = await listGithubRepositories(loaded.github);
+    return c.json({ repositories });
+  });
 
   routes.get("/git-providers/github/:gitProviderId/branches", async (c) => {
     const user = requireUser(c);
@@ -2112,27 +2256,24 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
     return c.json(result);
   });
 
-  routes.get(
-    "/git-providers/gitlab/:gitProviderId/repositories",
-    async (c) => {
-      const user = requireUser(c);
-      const db = c.get("db");
-      const gitProviderId = c.req.param("gitProviderId");
+  routes.get("/git-providers/gitlab/:gitProviderId/repositories", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const gitProviderId = c.req.param("gitProviderId");
 
-      const loaded = await loadGitProviderRow(db, gitProviderId);
-      if (loaded.parent.providerType !== "gitlab" || !loaded.gitlab) {
-        throw new HTTPException(400, { message: "Not a GitLab provider" });
-      }
-      await assertOrganizationAccess({
-        db,
-        organizationId: loaded.parent.organizationId,
-        userId: user.id,
-      });
+    const loaded = await loadGitProviderRow(db, gitProviderId);
+    if (loaded.parent.providerType !== "gitlab" || !loaded.gitlab) {
+      throw new HTTPException(400, { message: "Not a GitLab provider" });
+    }
+    await assertOrganizationAccess({
+      db,
+      organizationId: loaded.parent.organizationId,
+      userId: user.id,
+    });
 
-      const repositories = await listGitlabRepositories(db, loaded.gitlab);
-      return c.json({ repositories });
-    },
-  );
+    const repositories = await listGitlabRepositories(db, loaded.gitlab);
+    return c.json({ repositories });
+  });
 
   routes.get("/git-providers/gitlab/:gitProviderId/branches", async (c) => {
     const user = requireUser(c);
@@ -2576,9 +2717,86 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
   });
 
   routes.post("/providers/github/webhook", async (c) => {
-    // Stub: real webhook handling will arrive when we wire deploys.
-    // Acknowledge ping events so GitHub considers the hook healthy.
-    return c.body(null, 204);
+    const db = c.get("db");
+    const event = c.req.header("x-github-event") ?? "";
+    const signature = c.req.header("x-hub-signature-256") ?? null;
+    const body = await c.req.text();
+
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(body) as Record<string, unknown>;
+    } catch {
+      throw new HTTPException(400, { message: "Invalid GitHub webhook body" });
+    }
+
+    if (event === "ping") {
+      return c.body(null, 204);
+    }
+
+    if (event !== "push") {
+      return c.body(null, 204);
+    }
+
+    const installation = readJsonRecord(payload.installation);
+    const installationId =
+      typeof installation.id === "number" || typeof installation.id === "string"
+        ? String(installation.id)
+        : null;
+    if (installationId === null) {
+      return c.body(null, 204);
+    }
+
+    const githubProvider = first(
+      await db
+        .select()
+        .from(schema.githubProviders)
+        .where(eq(schema.githubProviders.installationId, installationId))
+        .limit(1),
+    );
+    if (!githubProvider) {
+      return c.body(null, 204);
+    }
+
+    if (
+      githubProvider.webhookSecret &&
+      !verifyGithubWebhookSignature({
+        body,
+        secret: githubProvider.webhookSecret,
+        signature,
+      })
+    ) {
+      throw new HTTPException(401, {
+        message: "Invalid GitHub webhook signature",
+      });
+    }
+
+    const repository = readJsonRecord(payload.repository);
+    const repositoryFullName =
+      typeof repository.full_name === "string" ? repository.full_name : null;
+    if (repositoryFullName === null) {
+      return c.body(null, 204);
+    }
+
+    const ref = typeof payload.ref === "string" ? payload.ref : "";
+    const branch = ref.startsWith("refs/heads/")
+      ? ref.slice("refs/heads/".length)
+      : null;
+
+    const workloads = await db.select().from(schema.projectWorkloads);
+    const matching = workloads.filter((workload) =>
+      workloadMatchesGithubPush({
+        branch,
+        gitProviderId: githubProvider.gitProviderId,
+        repositoryFullName,
+        workload,
+      }),
+    );
+
+    for (const workload of matching) {
+      await deployWorkloadFromWebhook({ db, env, workload });
+    }
+
+    return c.json({ deployed: matching.length });
   });
 
   routes.get("/providers/gitlab/callback", async (c) => {
@@ -2645,10 +2863,7 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       db,
       loaded.parent.organizationId,
     );
-    return c.redirect(
-      gitDashboardRedirect(slug, { gitlab: "connected" }),
-      307,
-    );
+    return c.redirect(gitDashboardRedirect(slug, { gitlab: "connected" }), 307);
   });
 
   routes.get("/providers/gitea/authorize", async (c) => {
@@ -2677,7 +2892,10 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       scope: gitea.scopes.split(",").join(" "),
       state: gitProviderId,
     });
-    return c.redirect(`${base}/login/oauth/authorize?${params.toString()}`, 307);
+    return c.redirect(
+      `${base}/login/oauth/authorize?${params.toString()}`,
+      307,
+    );
   });
 
   routes.get("/providers/gitea/callback", async (c) => {
@@ -2702,10 +2920,7 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       });
     }
 
-    const base = (gitea.giteaInternalUrl ?? gitea.giteaUrl).replace(
-      /\/$/u,
-      "",
-    );
+    const base = (gitea.giteaInternalUrl ?? gitea.giteaUrl).replace(/\/$/u, "");
     const params = new URLSearchParams({
       client_id: gitea.clientId,
       client_secret: gitea.clientSecret,
@@ -2753,10 +2968,7 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       db,
       loaded.parent.organizationId,
     );
-    return c.redirect(
-      gitDashboardRedirect(slug, { gitea: "connected" }),
-      307,
-    );
+    return c.redirect(gitDashboardRedirect(slug, { gitea: "connected" }), 307);
   });
 
   routes.get("/projects", async (c) => {
@@ -3115,13 +3327,21 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       userId: user.id,
     });
 
+    const isConfigured = "kind" in input;
+    const desiredState = isConfigured ? buildWorkloadDesiredState(input) : {};
+    const workloadKind: SerializableWorkload["kind"] = isConfigured
+      ? input.kind
+      : "unconfigured";
+    const workloadStatus: SerializableWorkload["status"] = isConfigured
+      ? "requested"
+      : "draft";
     const workload = {
-      desiredState: buildWorkloadDesiredState(input),
+      desiredState,
       id: createId("project_workload"),
-      kind: input.kind,
+      kind: workloadKind,
       name: input.name,
       projectId: project.id,
-      status: "requested" as const,
+      status: workloadStatus,
     };
 
     try {
@@ -3136,29 +3356,19 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       });
     }
 
-    await startWorkloadProvisioning({
-      db,
-      desiredState: workload.desiredState,
-      env,
-      failureMessage:
-        "Workload was recorded, but the provisioning workflow could not be started",
-      workload: { ...workload, observedState: {} },
-      workflowId: `provision-workload-${workload.id}`,
-    });
-
-    const created = first(
-      await db
-        .select()
-        .from(schema.projectWorkloads)
-        .where(eq(schema.projectWorkloads.id, workload.id))
-        .limit(1),
-    );
-
-    if (!created) {
-      throw new HTTPException(500, {
-        message: "Workload metadata could not be loaded",
+    if (isConfigured) {
+      await startWorkloadProvisioning({
+        db,
+        desiredState: workload.desiredState,
+        env,
+        failureMessage:
+          "Workload was recorded, but the provisioning workflow could not be started",
+        workload: { ...workload, observedState: {} },
+        workflowId: `provision-workload-${workload.id}`,
       });
     }
+
+    const created = await loadWorkloadOrThrow(db, workload.id);
 
     return c.json(
       {
@@ -3179,6 +3389,55 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
 
     return c.json({
       workload: serializeWorkload(workload, env),
+    });
+  });
+
+  routes.patch("/workloads/:workloadId/config", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const workload = await assertWorkloadAccess({
+      db,
+      userId: user.id,
+      workloadId: c.req.param("workloadId"),
+    });
+    const input = await parseJson(c, patchWorkloadConfigRequestSchema);
+    const desiredState = buildWorkloadDesiredState({
+      ...input,
+      name: input.name ?? workload.name,
+    } as ConfiguredWorkloadRequest);
+    const previousDesiredState = readJsonRecord(workload.desiredState);
+    if ("ingress" in previousDesiredState) {
+      desiredState.ingress = previousDesiredState.ingress;
+    }
+    const observedState = readJsonRecord(workload.observedState);
+    delete observedState.error;
+
+    try {
+      await db
+        .update(schema.projectWorkloads)
+        .set({
+          desiredState,
+          kind: input.kind,
+          name: input.name ?? workload.name,
+          observedState,
+          status: "draft",
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.projectWorkloads.id, workload.id));
+    } catch (error) {
+      if (!isWorkloadNameConflict(error)) {
+        throw error;
+      }
+
+      throw new HTTPException(409, {
+        message: "A workload with this name already exists in the project",
+      });
+    }
+
+    const updated = await loadWorkloadOrThrow(db, workload.id);
+
+    return c.json({
+      workload: serializeWorkload(updated, env),
     });
   });
 
@@ -3417,6 +3676,46 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
     });
   });
 
+  routes.post("/workloads/:workloadId/deploy", async (c) => {
+    const user = requireUser(c);
+    const db = c.get("db");
+    const workload = await assertWorkloadAccess({
+      db,
+      userId: user.id,
+      workloadId: c.req.param("workloadId"),
+    });
+
+    assertDeployableWorkload(workload);
+
+    const desiredPayload: Record<string, unknown> = {
+      ...readJsonRecord(workload.desiredState),
+    };
+
+    await db
+      .update(schema.projectWorkloads)
+      .set({
+        status: "provisioning",
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.projectWorkloads.id, workload.id));
+
+    await startWorkloadProvisioning({
+      db,
+      desiredState: desiredPayload,
+      env,
+      failureMessage:
+        "Deploy was requested, but the provisioning workflow could not be started.",
+      workload,
+      workflowId: `provision-workload-${workload.id}-deploy-${generateULID()}`,
+    });
+
+    const updatedRow = await loadWorkloadOrThrow(db, workload.id);
+
+    return c.json({
+      workload: serializeWorkload(updatedRow, env),
+    });
+  });
+
   routes.post("/workloads/:workloadId/rebuild", async (c) => {
     const user = requireUser(c);
     const db = c.get("db");
@@ -3426,12 +3725,7 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       workloadId: c.req.param("workloadId"),
     });
 
-    if (workload.kind !== "container" && workload.kind !== "function") {
-      throw new HTTPException(400, {
-        message:
-          "Rebuild is only supported for container and function workloads.",
-      });
-    }
+    assertDeployableWorkload(workload);
 
     const desiredPayload: Record<string, unknown> = {
       ...readJsonRecord(workload.desiredState),
@@ -3455,19 +3749,7 @@ export function createV1Routes({ env }: CreateV1RoutesOptions) {
       workflowId: `provision-workload-${workload.id}-rebuild-${generateULID()}`,
     });
 
-    const updatedRow = first(
-      await db
-        .select()
-        .from(schema.projectWorkloads)
-        .where(eq(schema.projectWorkloads.id, workload.id))
-        .limit(1),
-    );
-
-    if (!updatedRow) {
-      throw new HTTPException(500, {
-        message: "Workload metadata could not be loaded",
-      });
-    }
+    const updatedRow = await loadWorkloadOrThrow(db, workload.id);
 
     return c.json({
       workload: serializeWorkload(updatedRow, env),

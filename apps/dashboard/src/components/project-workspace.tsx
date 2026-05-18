@@ -4,11 +4,7 @@ import {
   useRouter,
   useRouterState,
 } from "@tanstack/react-router";
-import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   BranchCopyMode,
   BranchConnectionResponse,
@@ -17,8 +13,13 @@ import type {
   CreateDatabaseRequest,
   CreateWorkloadRequest,
   DatabaseResponse,
+  FunctionRuntime,
+  GitBranch as GitBranchResponse,
+  GitProviderResponse,
+  GitRepository,
   OrganizationResponse,
   PatchBranchSettingsRequest,
+  PatchWorkloadConfigRequest,
   ProjectResponse,
   WorkloadResponse,
 } from "@openbika/contracts";
@@ -60,6 +61,7 @@ import {
   Code2,
   Copy,
   Database,
+  Container,
   Eye,
   EyeOff,
   GitBranch,
@@ -95,12 +97,17 @@ import {
   workloadKindIcon,
   workloadKindLabel,
   workloadObservedError,
+  workloadObservedPublicBaseUrl,
 } from "#/components/workloads-panel";
 import {
   dashboardKeys,
   createBranchRequest,
   createDatabaseRequest,
   createWorkloadRequest,
+  deployWorkloadRequest,
+  fetchGitBranches,
+  fetchGitProviders,
+  fetchGitRepositories,
   fetchBranchConnection,
   fetchDatabases,
   fetchHealthOk,
@@ -109,8 +116,10 @@ import {
   fetchWorkload,
   fetchWorkloads,
   patchBranchSettingsRequest,
+  patchWorkloadConfigRequest,
   rebuildWorkloadRequest,
 } from "#/lib/dashboard-api-queries";
+import { parseEnvText, serializeEnvText } from "#/lib/env-text";
 import {
   type ProjectWorkspaceView,
   deriveProjectWorkspaceRoute,
@@ -146,20 +155,23 @@ export interface ProjectWorkspaceOutletContext {
     branchId: string,
     input: PatchBranchSettingsRequest,
   ) => Promise<void>;
+  organizationId: string | null;
   organizationSlug: string;
+  projectId: string | null;
   projectSlug: string;
   refreshWorkloads: () => Promise<void>;
   workloads: WorkloadResponse[];
 }
 
-const ProjectOutletContext = React.createContext<
-  ProjectWorkspaceOutletContext | null
->(null);
+const ProjectOutletContext =
+  React.createContext<ProjectWorkspaceOutletContext | null>(null);
 
 export function useProjectWorkspaceOutlet(): ProjectWorkspaceOutletContext {
   const value = React.useContext(ProjectOutletContext);
   if (!value) {
-    throw new Error("useProjectWorkspaceOutlet must be used under ProjectWorkspace.");
+    throw new Error(
+      "useProjectWorkspaceOutlet must be used under ProjectWorkspace.",
+    );
   }
   return value;
 }
@@ -204,8 +216,7 @@ function hasActiveDatabaseProvisioning(databases: DatabaseResponse[]) {
 function hasActiveWorkloadProvisioning(workloads: WorkloadResponse[]) {
   return workloads.some(
     (workload) =>
-      workload.status === "requested" ||
-      workload.status === "provisioning",
+      workload.status === "requested" || workload.status === "provisioning",
   );
 }
 
@@ -379,8 +390,7 @@ export function ProjectWorkspace({
   const pending =
     orgsQuery.isPending ||
     (!!orgId && projectsQuery.isPending) ||
-    (!!projectId &&
-      (databasesQuery.isPending || workloadsQuery.isPending));
+    (!!projectId && (databasesQuery.isPending || workloadsQuery.isPending));
 
   const loadError = React.useMemo(() => {
     if (orgsQuery.error instanceof Error) return orgsQuery.error.message;
@@ -463,11 +473,13 @@ export function ProjectWorkspace({
     });
   }
 
-  async function handleCreateWorkload(input: CreateWorkloadRequest) {
+  async function handleCreateWorkload(
+    input: CreateWorkloadRequest,
+  ): Promise<WorkloadResponse> {
     if (!projectId) {
       throw new Error("Project is not loaded yet.");
     }
-    await createWorkloadMut.mutateAsync(input);
+    return createWorkloadMut.mutateAsync(input);
   }
 
   async function handleCreateDatabase(input: CreateDatabaseRequest) {
@@ -495,9 +507,7 @@ export function ProjectWorkspace({
   const workloadHydrateQuery = useQuery({
     queryKey: dashboardKeys.workload(workloadDetailId ?? "_"),
     queryFn: () => fetchWorkload(workloadDetailId!),
-    enabled: Boolean(
-      shouldHydrateWorkload && workloadDetailId && !pending,
-    ),
+    enabled: Boolean(shouldHydrateWorkload && workloadDetailId && !pending),
     retry: 1,
   });
 
@@ -646,7 +656,9 @@ export function ProjectWorkspace({
     databases,
     onCreateBranch: handleCreateBranch,
     onPatchBranchSettings: handlePatchBranchSettings,
+    organizationId: orgId,
     organizationSlug,
+    projectId,
     projectSlug,
     refreshWorkloads,
     workloads,
@@ -1121,8 +1133,7 @@ function WorkspaceDatabaseTabs({
     studioSegments.length >= 2 ? (studioSegments[1] ?? null) : null;
 
   const dbBranches = branches.filter((row) => row.database.id === databaseId);
-  const effectiveBranchId =
-    studioBranchId ?? dbBranches[0]?.branch.id ?? null;
+  const effectiveBranchId = studioBranchId ?? dbBranches[0]?.branch.id ?? null;
 
   const isLogs = pathname === `${base}/logs`;
 
@@ -1141,8 +1152,7 @@ function WorkspaceDatabaseTabs({
       : null;
 
   const isSqlActive = studioBranchId !== null && studioViewRaw === "sql";
-  const isTablesActive =
-    studioBranchId !== null && studioViewRaw === "tables";
+  const isTablesActive = studioBranchId !== null && studioViewRaw === "tables";
   const isSettingsActive =
     studioBranchId !== null && studioViewRaw === "settings";
   const isBackupsActive =
@@ -1302,9 +1312,7 @@ function WorkspaceDatabaseBreadcrumbBranchSwitch({
                     organizationSlug,
                     projectSlug,
                     view:
-                      urlBranchId !== null
-                        ? studioNavigateView
-                        : "overview",
+                      urlBranchId !== null ? studioNavigateView : "overview",
                   },
                   search: {},
                   to: "/$organizationSlug/projects/$projectSlug/databases/$databaseId/branches/$branchId/$view",
@@ -1643,7 +1651,7 @@ interface ProjectWorkspaceContentProps {
     parentBranchId?: string;
   }) => Promise<void>;
   onCreateDatabase: (input: CreateDatabaseRequest) => Promise<void>;
-  onCreateWorkload: (input: CreateWorkloadRequest) => Promise<void>;
+  onCreateWorkload: (input: CreateWorkloadRequest) => Promise<WorkloadResponse>;
   organizationSlug: string;
   project: ProjectResponse | null;
   projectSlug: string;
@@ -2123,7 +2131,13 @@ function FilterChip({
   );
 }
 
-function ResourceCardKeyRow({ label, value }: { label: string; value: string }) {
+function ResourceCardKeyRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
   return (
     <div className="flex items-center justify-between gap-2 text-xs">
       <span className="shrink-0 text-muted-foreground uppercase tracking-wide">
@@ -2199,7 +2213,9 @@ function DatabaseServiceCard({
                 <CardTitle className="truncate text-base">
                   {database.name}
                 </CardTitle>
-                <CardDescription>Postgres {database.postgresVersion}</CardDescription>
+                <CardDescription>
+                  Postgres {database.postgresVersion}
+                </CardDescription>
               </div>
             </div>
             <DatabaseStatusBadge status={database.status} />
@@ -2265,16 +2281,22 @@ function WorkloadServiceCard({
         <CardContent className="grid gap-3">
           <ResourceCardKeyRow
             label={
-              workload.kind === "container" ? "Image" : "Runtime"
+              workload.kind === "container"
+                ? "Image"
+                : workload.kind === "function"
+                  ? "Runtime"
+                  : "Setup"
             }
             value={
               workload.kind === "container"
                 ? typeof workload.desiredState.image === "string"
                   ? workload.desiredState.image
                   : "—"
-                : typeof workload.desiredState.runtime === "string"
-                  ? workload.desiredState.runtime
-                  : "—"
+                : workload.kind === "function"
+                  ? typeof workload.desiredState.runtime === "string"
+                    ? workload.desiredState.runtime
+                    : "—"
+                  : "Not configured"
             }
           />
           {error ? (
@@ -2906,9 +2928,7 @@ function CreateDatabaseModal({
                 </label>
                 <Input
                   id="database-postgres-version"
-                  onChange={(event) =>
-                    setPostgresVersion(event.target.value)
-                  }
+                  onChange={(event) => setPostgresVersion(event.target.value)}
                   placeholder="18"
                   value={postgresVersion}
                 />
@@ -3331,8 +3351,7 @@ export function DatabaseResourceOverviewOutlet({
   const databaseBranches = branches.filter(
     (row) => row.database.id === databaseId,
   );
-  const studioBranchAnchor =
-    databaseBranches[0] ?? null;
+  const studioBranchAnchor = databaseBranches[0] ?? null;
 
   if (!database) {
     return (
@@ -3392,7 +3411,10 @@ export function DatabaseResourceOverviewOutlet({
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {database.branches.map((branch) => (
-            <Card key={branch.id} className="h-full rounded-xl shadow-none transition-colors hover:bg-muted/30">
+            <Card
+              key={branch.id}
+              className="h-full rounded-xl shadow-none transition-colors hover:bg-muted/30"
+            >
               <CardHeader>
                 <div className="flex min-w-0 items-start justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-3">
@@ -3489,7 +3511,211 @@ export function WorkloadResourceOverviewOutlet({
 }: {
   workloadId: string;
 }) {
-  const { workloads, refreshWorkloads } = useProjectWorkspaceOutlet();
+  const { organizationId, projectId, workloads, refreshWorkloads } =
+    useProjectWorkspaceOutlet();
+  const queryClient = useQueryClient();
+  const workload = workloads.find((item) => item.id === workloadId) ?? null;
+  const initialKind =
+    workload?.kind === "function" || workload?.kind === "container"
+      ? workload.kind
+      : "container";
+  const [kind, setKind] = React.useState<"container" | "function">(initialKind);
+  const [containerSource, setContainerSource] = React.useState<
+    "image" | "gitProvider" | "git"
+  >("image");
+  const [functionSource, setFunctionSource] = React.useState<
+    "image" | "bundle" | "gitProvider" | "git"
+  >("gitProvider");
+  const [image, setImage] = React.useState("");
+  const [portsText, setPortsText] = React.useState("");
+  const [runtime, setRuntime] = React.useState<FunctionRuntime>("bun");
+  const [entrypoint, setEntrypoint] = React.useState("index.ts");
+  const [artifactUri, setArtifactUri] = React.useState("");
+  const [dockerfilePath, setDockerfilePath] = React.useState("Dockerfile");
+  const [contextPath, setContextPath] = React.useState(".");
+  const [genericRepositoryUrl, setGenericRepositoryUrl] = React.useState("");
+  const [gitProviderId, setGitProviderId] = React.useState("");
+  const [repositoryFullName, setRepositoryFullName] = React.useState("");
+  const [repositoryId, setRepositoryId] = React.useState<
+    string | number | undefined
+  >();
+  const [repositoryUrl, setRepositoryUrl] = React.useState("");
+  const [gitRef, setGitRef] = React.useState("");
+  const [gitPath, setGitPath] = React.useState("");
+  const [envText, setEnvText] = React.useState("");
+  const [autoDeploy, setAutoDeploy] = React.useState(true);
+  const [formError, setFormError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!workload) return;
+    const nextDesired = workload.desiredState;
+    if (workload.kind === "container" || workload.kind === "function") {
+      setKind(workload.kind);
+    }
+    const build = readRecord(nextDesired.build);
+    const source = readRecord(build.source);
+    const fnSource = readRecord(nextDesired.source);
+    const imageValue =
+      typeof nextDesired.image === "string"
+        ? nextDesired.image
+        : typeof fnSource.image === "string"
+          ? fnSource.image
+          : "";
+    setImage(imageValue);
+    setPortsText(readNumberArray(nextDesired.ports).join(", "));
+    setRuntime(nextDesired.runtime === "node" ? "node" : "bun");
+    setEntrypoint(
+      typeof nextDesired.entrypoint === "string"
+        ? nextDesired.entrypoint
+        : "index.ts",
+    );
+    setArtifactUri(
+      typeof fnSource.artifactUri === "string" ? fnSource.artifactUri : "",
+    );
+    setDockerfilePath(
+      typeof build.dockerfilePath === "string"
+        ? build.dockerfilePath
+        : "Dockerfile",
+    );
+    setContextPath(
+      typeof build.contextUri === "string" ? build.contextUri : ".",
+    );
+    const providerSource =
+      source.type === "gitProvider"
+        ? source
+        : fnSource.type === "gitProvider"
+          ? fnSource
+          : {};
+    setGitProviderId(
+      typeof providerSource.gitProviderId === "string"
+        ? providerSource.gitProviderId
+        : "",
+    );
+    setRepositoryFullName(
+      typeof providerSource.repositoryFullName === "string"
+        ? providerSource.repositoryFullName
+        : "",
+    );
+    setRepositoryId(
+      typeof providerSource.repositoryId === "string" ||
+        typeof providerSource.repositoryId === "number"
+        ? providerSource.repositoryId
+        : undefined,
+    );
+    setRepositoryUrl(
+      typeof providerSource.repositoryUrl === "string"
+        ? providerSource.repositoryUrl
+        : "",
+    );
+    setGitRef(
+      typeof source.ref === "string"
+        ? source.ref
+        : typeof fnSource.ref === "string"
+          ? fnSource.ref
+          : "",
+    );
+    setGitPath(
+      typeof source.path === "string"
+        ? source.path
+        : typeof fnSource.path === "string"
+          ? fnSource.path
+          : "",
+    );
+    const genericSource =
+      source.type === "git" ? source : fnSource.type === "git" ? fnSource : {};
+    setGenericRepositoryUrl(
+      typeof genericSource.repositoryUrl === "string"
+        ? genericSource.repositoryUrl
+        : "",
+    );
+    setContainerSource(
+      typeof nextDesired.image === "string"
+        ? "image"
+        : source.type === "git"
+          ? "git"
+          : source.type === "gitProvider"
+            ? "gitProvider"
+            : "image",
+    );
+    setFunctionSource(
+      fnSource.type === "image"
+        ? "image"
+        : fnSource.type === "bundle"
+          ? "bundle"
+          : fnSource.type === "git"
+            ? "git"
+            : "gitProvider",
+    );
+    setAutoDeploy(nextDesired.autoDeploy !== false);
+    setEnvText(formatEnvText(readStringRecord(nextDesired.env)));
+  }, [workload]);
+
+  const providersQuery = useQuery({
+    enabled: Boolean(organizationId),
+    queryKey: organizationId
+      ? dashboardKeys.gitProviders(organizationId)
+      : dashboardKeys.gitProviders("_"),
+    queryFn: () => fetchGitProviders(organizationId!),
+  });
+
+  const selectedProvider =
+    providersQuery.data?.find((provider) => provider.id === gitProviderId) ??
+    null;
+
+  const repositoriesQuery = useQuery({
+    enabled: Boolean(selectedProvider),
+    queryKey: selectedProvider
+      ? dashboardKeys.gitRepositories(
+          selectedProvider.providerType,
+          selectedProvider.id,
+        )
+      : dashboardKeys.gitRepositories("github", "_"),
+    queryFn: () =>
+      fetchGitRepositories(
+        selectedProvider!.providerType,
+        selectedProvider!.id,
+      ),
+  });
+
+  const branchesQuery = useQuery({
+    enabled: Boolean(selectedProvider && repositoryFullName),
+    queryKey: selectedProvider
+      ? dashboardKeys.gitBranches(
+          selectedProvider.providerType,
+          selectedProvider.id,
+          repositoryFullName || "_",
+        )
+      : dashboardKeys.gitBranches("github", "_", "_"),
+    queryFn: () =>
+      fetchGitBranches({
+        gitProviderId: selectedProvider!.id,
+        providerType: selectedProvider!.providerType,
+        repositoryFullName,
+        repositoryId,
+      }),
+  });
+
+  const configMut = useMutation({
+    mutationFn: (input: PatchWorkloadConfigRequest) =>
+      patchWorkloadConfigRequest(workloadId, input),
+    onSuccess: (updated) => {
+      if (projectId) {
+        queryClient.setQueryData(
+          dashboardKeys.workloads(projectId),
+          (old: WorkloadResponse[] | undefined) =>
+            old?.map((item) => (item.id === updated.id ? updated : item)) ??
+            old,
+        );
+      }
+      void refreshWorkloads();
+    },
+  });
+  const deployMut = useMutation({
+    mutationFn: () => deployWorkloadRequest(workloadId),
+    onSuccess: () => {
+      void refreshWorkloads();
+    },
+  });
   const rebuildMut = useMutation({
     mutationFn: () => rebuildWorkloadRequest(workloadId),
     onSuccess: () => {
@@ -3497,10 +3723,119 @@ export function WorkloadResourceOverviewOutlet({
     },
   });
 
-  const workload = workloads.find((item) => item.id === workloadId) ?? null;
-
   const busyProvisioning =
     workload?.status === "provisioning" || workload?.status === "requested";
+
+  function buildConfigPayload(): PatchWorkloadConfigRequest {
+    const env = parseOptionalEnv(envText);
+    if (kind === "container") {
+      const ports = parseOptionalPorts(portsText);
+      if (containerSource === "image") {
+        if (!image.trim()) {
+          throw new Error("Docker image is required.");
+        }
+        return {
+          autoDeploy,
+          env,
+          image: image.trim(),
+          kind: "container",
+          ports,
+        };
+      }
+
+      return {
+        build: {
+          contextUri: contextPath.trim() || ".",
+          dockerfilePath: dockerfilePath.trim() || "Dockerfile",
+          source: buildGitSource({
+            genericRepositoryUrl,
+            gitPath,
+            gitProviderId,
+            gitRef,
+            repositoryFullName,
+            repositoryId,
+            repositoryUrl,
+            selectedProvider,
+            sourceType: containerSource,
+          }),
+        },
+        autoDeploy,
+        env,
+        kind: "container",
+        ports,
+      };
+    }
+
+    const base = {
+      autoDeploy,
+      entrypoint: entrypoint.trim() || "index.ts",
+      env,
+      kind: "function" as const,
+      runtime,
+    };
+
+    if (functionSource === "image") {
+      if (!image.trim()) {
+        throw new Error("Function image is required.");
+      }
+      return {
+        ...base,
+        source: { image: image.trim(), type: "image" },
+      };
+    }
+
+    if (functionSource === "bundle") {
+      if (!artifactUri.trim()) {
+        throw new Error("Bundle artifact URI is required.");
+      }
+      return {
+        ...base,
+        source: { artifactUri: artifactUri.trim(), type: "bundle" },
+      };
+    }
+
+    return {
+      ...base,
+      build: {
+        contextUri: contextPath.trim() || ".",
+        dockerfilePath: dockerfilePath.trim() || "Dockerfile",
+      },
+      source: buildGitSource({
+        genericRepositoryUrl,
+        gitPath,
+        gitProviderId,
+        gitRef,
+        repositoryFullName,
+        repositoryId,
+        repositoryUrl,
+        selectedProvider,
+        sourceType: functionSource,
+      }),
+    };
+  }
+
+  async function saveConfig(): Promise<void> {
+    setFormError(null);
+    try {
+      await configMut.mutateAsync(buildConfigPayload());
+    } catch (error) {
+      setFormError(
+        error instanceof Error
+          ? error.message
+          : "Configuration could not be saved.",
+      );
+      throw error;
+    }
+  }
+
+  async function deploy() {
+    try {
+      await saveConfig();
+      await deployMut.mutateAsync();
+    } catch {
+      /* error surfaced via formError / deployMut */
+    }
+  }
 
   async function rebuild() {
     if (workload === null) return;
@@ -3512,11 +3847,16 @@ export function WorkloadResourceOverviewOutlet({
   }
 
   const rebuildErrorMessage =
-    rebuildMut.error instanceof Error
-      ? rebuildMut.error.message
-      : rebuildMut.isError
-        ? "Rebuild could not be started"
-        : null;
+    formError ??
+    (deployMut.error instanceof Error
+      ? deployMut.error.message
+      : deployMut.isError
+        ? "Deploy could not be started"
+        : rebuildMut.error instanceof Error
+          ? rebuildMut.error.message
+          : rebuildMut.isError
+            ? "Rebuild could not be started"
+            : null);
 
   if (!workload) {
     return (
@@ -3530,90 +3870,933 @@ export function WorkloadResourceOverviewOutlet({
 
   const Icon = workloadKindIcon(workload.kind);
   const error = workloadObservedError(workload);
+  const isConfigured =
+    workload.kind === "container" || workload.kind === "function";
+  const isSaving = configMut.isPending || deployMut.isPending;
+  const publicUrl = workloadObservedPublicBaseUrl(workload);
+  const sourceSummary = workloadSourceSummary(workload);
+  const activeSource = kind === "container" ? containerSource : functionSource;
 
   return (
-    <div className="grid gap-4">
-      <Card>
-        <CardHeader>
-          <div className="flex min-w-0 items-start justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="flex size-11 shrink-0 items-center justify-center rounded-md border border-border bg-muted">
+    <div className="grid gap-5">
+      <Card className="overflow-hidden">
+        <CardHeader className="border-border border-b bg-muted/20">
+          <div className="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex min-w-0 items-start gap-4">
+              <div className="flex size-12 shrink-0 items-center justify-center rounded-xl border border-border bg-background">
                 <Icon className="text-muted-foreground size-5" />
               </div>
-              <div className="min-w-0">
-                <CardTitle className="truncate text-xl">
-                  {workload.name}
-                </CardTitle>
-                <CardDescription>
-                  {workloadKindLabel(workload.kind)}
-                </CardDescription>
+              <div className="min-w-0 space-y-1">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <CardTitle className="truncate text-2xl">
+                    {workload.name}
+                  </CardTitle>
+                  <StatusDot status={workload.status} />
+                </div>
               </div>
             </div>
-            <div className="flex max-w-full min-w-0 flex-col items-end gap-2">
-              <div className="flex flex-wrap items-center justify-end gap-3">
-                <Button
-                  aria-busy={rebuildMut.isPending}
-                  className="gap-1.5"
-                  disabled={rebuildMut.isPending || busyProvisioning}
-                  onClick={() => void rebuild()}
-                  size="sm"
-                  type="button"
-                  variant="outline"
-                >
-                  <RotateCcw
-                    className={cn(
-                      "size-4",
-                      rebuildMut.isPending && "animate-spin",
-                    )}
-                    aria-hidden
-                  />
-                  Rebuild
-                </Button>
-                <StatusDot status={workload.status} />
-              </div>
-              {rebuildErrorMessage !== null ? (
-                <p
-                  className="max-w-[min(100%,21rem)] break-words text-right text-destructive text-xs leading-snug"
-                  role="alert"
-                >
-                  {rebuildErrorMessage}
-                </p>
-              ) : null}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                aria-busy={deployMut.isPending}
+                className="gap-1.5"
+                disabled={isSaving || busyProvisioning}
+                onClick={() => void deploy()}
+                type="button"
+              >
+                <Workflow
+                  className={cn(
+                    "size-4",
+                    deployMut.isPending && "animate-pulse",
+                  )}
+                  aria-hidden
+                />
+                Deploy Now
+              </Button>
+              <Button
+                aria-busy={rebuildMut.isPending}
+                className="gap-1.5"
+                disabled={
+                  rebuildMut.isPending ||
+                  busyProvisioning ||
+                  !isConfigured ||
+                  workload.status === "draft"
+                }
+                onClick={() => void rebuild()}
+                type="button"
+                variant="outline"
+              >
+                <RotateCcw
+                  className={cn(
+                    "size-4",
+                    rebuildMut.isPending && "animate-spin",
+                  )}
+                  aria-hidden
+                />
+                Rebuild
+              </Button>
             </div>
           </div>
         </CardHeader>
-        <CardContent className="grid gap-3">
-          {workload.kind === "container" ? (
-            <div className="flex items-center justify-between gap-2 text-sm">
-              <span className="text-muted-foreground uppercase tracking-wide text-xs">
-                Image
-              </span>
-              <span className="truncate font-mono">
-                {typeof workload.desiredState.image === "string"
-                  ? workload.desiredState.image
-                  : "—"}
-              </span>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between gap-2 text-sm">
-              <span className="text-muted-foreground uppercase tracking-wide text-xs">
-                Runtime
-              </span>
-              <span className="truncate font-mono capitalize">
-                {typeof workload.desiredState.runtime === "string"
+        <CardContent className="grid gap-4 p-4 sm:grid-cols-2 lg:grid-cols-4">
+          <WorkloadFact label="Type" value={workloadKindLabel(workload.kind)} />
+          <WorkloadFact label="Source" value={sourceSummary} />
+          <WorkloadFact
+            label={workload.kind === "function" ? "Runtime" : "Ports"}
+            value={
+              workload.kind === "function"
+                ? typeof workload.desiredState.runtime === "string"
                   ? workload.desiredState.runtime
-                  : "—"}
-              </span>
-            </div>
-          )}
+                  : "Not set"
+                : readNumberArray(workload.desiredState.ports).join(", ") ||
+                  "Not set"
+            }
+          />
+          <WorkloadFact
+            label="Endpoint"
+            value={publicUrl ?? "Not deployed"}
+            valueClassName={publicUrl ? "normal-case" : undefined}
+          />
           {error ? (
-            <p className="text-destructive flex items-start gap-1.5 text-sm">
+            <p className="text-destructive flex items-start gap-1.5 text-sm sm:col-span-2 lg:col-span-4">
               <AlertCircle className="size-4 shrink-0" />
               <span>{error}</span>
             </p>
           ) : null}
+          {rebuildErrorMessage !== null ? (
+            <p
+              className="text-destructive text-sm sm:col-span-2 lg:col-span-4"
+              role="alert"
+            >
+              {rebuildErrorMessage}
+            </p>
+          ) : null}
         </CardContent>
       </Card>
+
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
+        <div className="grid gap-5">
+          <Card>
+            <CardHeader className="pb-3">
+              <SectionEyebrow>General</SectionEyebrow>
+              <CardTitle>Type</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3 sm:grid-cols-2">
+              <ChoiceCard
+                active={kind === "container"}
+                icon={<Container className="size-4" />}
+                label="Container"
+                onClick={() => setKind("container")}
+              />
+              <ChoiceCard
+                active={kind === "function"}
+                icon={<Workflow className="size-4" />}
+                label="Function"
+                onClick={() => setKind("function")}
+              />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <SectionEyebrow>Source</SectionEyebrow>
+              <CardTitle>Provider</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-4">
+              {kind === "container" ? (
+                <SourceModeTabs
+                  options={[
+                    {
+                      icon: <Container className="size-4" />,
+                      label: "Docker Image",
+                      value: "image",
+                    },
+                    {
+                      icon: <GitBranch className="size-4" />,
+                      label: "Git Provider",
+                      value: "gitProvider",
+                    },
+                    {
+                      icon: <Code2 className="size-4" />,
+                      label: "Git URL",
+                      value: "git",
+                    },
+                  ]}
+                  value={containerSource}
+                  onChange={(value) =>
+                    setContainerSource(value as "image" | "gitProvider" | "git")
+                  }
+                />
+              ) : (
+                <SourceModeTabs
+                  options={[
+                    {
+                      icon: <GitBranch className="size-4" />,
+                      label: "Git Provider",
+                      value: "gitProvider",
+                    },
+                    {
+                      icon: <Code2 className="size-4" />,
+                      label: "Git URL",
+                      value: "git",
+                    },
+                    {
+                      icon: <Container className="size-4" />,
+                      label: "Image",
+                      value: "image",
+                    },
+                    {
+                      icon: <Boxes className="size-4" />,
+                      label: "Bundle",
+                      value: "bundle",
+                    },
+                  ]}
+                  value={functionSource}
+                  onChange={(value) =>
+                    setFunctionSource(
+                      value as "image" | "bundle" | "gitProvider" | "git",
+                    )
+                  }
+                />
+              )}
+
+              {kind === "container" ? (
+                <>
+                  {containerSource === "image" ? (
+                    <TextField
+                      label="Docker image"
+                      onChange={setImage}
+                      placeholder="ghcr.io/acme/api:latest"
+                      value={image}
+                    />
+                  ) : (
+                    <GitSourceFields
+                      branches={branchesQuery.data ?? []}
+                      contextPath={contextPath}
+                      dockerfilePath={dockerfilePath}
+                      genericRepositoryUrl={genericRepositoryUrl}
+                      gitPath={gitPath}
+                      gitProviderId={gitProviderId}
+                      gitRef={gitRef}
+                      loadingBranches={branchesQuery.isFetching}
+                      loadingProviders={providersQuery.isFetching}
+                      loadingRepositories={repositoriesQuery.isFetching}
+                      onContextPathChange={setContextPath}
+                      onDockerfilePathChange={setDockerfilePath}
+                      onGenericRepositoryUrlChange={setGenericRepositoryUrl}
+                      onGitPathChange={setGitPath}
+                      onGitProviderChange={(next) => {
+                        setGitProviderId(next);
+                        setRepositoryFullName("");
+                        setRepositoryId(undefined);
+                        setRepositoryUrl("");
+                        setGitRef("");
+                      }}
+                      onGitRefChange={setGitRef}
+                      onRepositoryChange={(repo) => {
+                        setRepositoryFullName(repo.fullName);
+                        setRepositoryId(repo.id);
+                        setRepositoryUrl(repo.url ?? "");
+                        setGitRef(repo.defaultBranch ?? "");
+                      }}
+                      providers={providersQuery.data ?? []}
+                      repositories={repositoriesQuery.data ?? []}
+                      repositoryFullName={repositoryFullName}
+                      sourceType={
+                        containerSource === "git" ? "git" : "gitProvider"
+                      }
+                    />
+                  )}
+                </>
+              ) : (
+                <>
+                  {functionSource === "image" ? (
+                    <TextField
+                      label="Function image"
+                      onChange={setImage}
+                      placeholder="ghcr.io/acme/function:latest"
+                      value={image}
+                    />
+                  ) : functionSource === "bundle" ? (
+                    <TextField
+                      label="Artifact URI"
+                      onChange={setArtifactUri}
+                      placeholder="s3://bucket/function.zip"
+                      value={artifactUri}
+                    />
+                  ) : (
+                    <GitSourceFields
+                      branches={branchesQuery.data ?? []}
+                      contextPath={contextPath}
+                      dockerfilePath={dockerfilePath}
+                      genericRepositoryUrl={genericRepositoryUrl}
+                      gitPath={gitPath}
+                      gitProviderId={gitProviderId}
+                      gitRef={gitRef}
+                      loadingBranches={branchesQuery.isFetching}
+                      loadingProviders={providersQuery.isFetching}
+                      loadingRepositories={repositoriesQuery.isFetching}
+                      onContextPathChange={setContextPath}
+                      onDockerfilePathChange={setDockerfilePath}
+                      onGenericRepositoryUrlChange={setGenericRepositoryUrl}
+                      onGitPathChange={setGitPath}
+                      onGitProviderChange={(next) => {
+                        setGitProviderId(next);
+                        setRepositoryFullName("");
+                        setRepositoryId(undefined);
+                        setRepositoryUrl("");
+                        setGitRef("");
+                      }}
+                      onGitRefChange={setGitRef}
+                      onRepositoryChange={(repo) => {
+                        setRepositoryFullName(repo.fullName);
+                        setRepositoryId(repo.id);
+                        setRepositoryUrl(repo.url ?? "");
+                        setGitRef(repo.defaultBranch ?? "");
+                      }}
+                      providers={providersQuery.data ?? []}
+                      repositories={repositoriesQuery.data ?? []}
+                      repositoryFullName={repositoryFullName}
+                      sourceType={
+                        functionSource === "git" ? "git" : "gitProvider"
+                      }
+                    />
+                  )}
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <SectionEyebrow>
+                {kind === "function" ? "Runtime" : "Networking"}
+              </SectionEyebrow>
+              <CardTitle>
+                {kind === "function" ? "Function runtime" : "Ports"}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-4 sm:grid-cols-2">
+              {kind === "function" ? (
+                <>
+                  <SelectField
+                    label="Runtime"
+                    onChange={(value) => setRuntime(value as FunctionRuntime)}
+                    options={[
+                      ["bun", "Bun"],
+                      ["node", "Node"],
+                    ]}
+                    value={runtime}
+                  />
+                  <TextField
+                    label="Entrypoint"
+                    onChange={setEntrypoint}
+                    placeholder="index.ts"
+                    value={entrypoint}
+                  />
+                </>
+              ) : (
+                <TextField
+                  label="Ports"
+                  onChange={setPortsText}
+                  placeholder="3000, 8080"
+                  value={portsText}
+                />
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <SectionEyebrow>Environment</SectionEyebrow>
+              <CardTitle>Variables</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <textarea
+                className={cn(
+                  "min-h-36 w-full rounded-md border border-border bg-background p-3 font-mono text-sm",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                )}
+                id="workload-env"
+                onChange={(event) => setEnvText(event.target.value)}
+                placeholder="KEY=value"
+                value={envText}
+              />
+            </CardContent>
+          </Card>
+        </div>
+
+        <Card className="h-fit xl:sticky xl:top-20">
+          <CardHeader className="pb-3">
+            <SectionEyebrow>Deploy</SectionEyebrow>
+            <CardTitle>Summary</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <div className="grid gap-3 rounded-lg border border-border bg-muted/20 p-3">
+              <WorkloadFact label="Type" value={kind} />
+              <WorkloadFact
+                label="Source"
+                value={sourceModeLabel(activeSource)}
+              />
+              <WorkloadFact
+                label="Status"
+                value={busyProvisioning ? "Provisioning" : workload.status}
+              />
+            </div>
+            <label className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm">
+              <span>Auto deploy on push</span>
+              <input
+                checked={autoDeploy}
+                className="size-4 accent-primary"
+                onChange={(event) => setAutoDeploy(event.target.checked)}
+                type="checkbox"
+              />
+            </label>
+            <Button
+              className="w-full"
+              disabled={isSaving || busyProvisioning}
+              onClick={() => void deploy()}
+              type="button"
+            >
+              {deployMut.isPending ? "Deploying..." : "Deploy Now"}
+            </Button>
+            <Button
+              className="w-full"
+              disabled={configMut.isPending || busyProvisioning}
+              onClick={() => void saveConfig()}
+              type="button"
+              variant="outline"
+            >
+              {configMut.isPending ? "Saving..." : "Save configuration"}
+            </Button>
+            {rebuildErrorMessage !== null ? (
+              <p className="text-destructive text-sm" role="alert">
+                {rebuildErrorMessage}
+              </p>
+            ) : null}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function readNumberArray(value: unknown): number[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is number => Number.isInteger(item))
+    : [];
+}
+
+function readStringRecord(value: unknown): Record<string, string> {
+  const record = readRecord(value);
+  return Object.fromEntries(
+    Object.entries(record).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
+}
+
+function formatEnvText(env: Record<string, string>): string {
+  return serializeEnvText(env);
+}
+
+function sourceModeLabel(value: string): string {
+  switch (value) {
+    case "image":
+      return "Docker image";
+    case "gitProvider":
+      return "Git provider";
+    case "git":
+      return "Git URL";
+    case "bundle":
+      return "Bundle";
+    default:
+      return value;
+  }
+}
+
+function workloadSourceSummary(workload: WorkloadResponse): string {
+  const desired = workload.desiredState;
+  const build = readRecord(desired.build);
+  const buildSource = readRecord(build.source);
+  const functionSource = readRecord(desired.source);
+
+  if (typeof desired.image === "string" && desired.image.trim().length > 0) {
+    return desired.image;
+  }
+
+  if (
+    functionSource.type === "image" &&
+    typeof functionSource.image === "string"
+  ) {
+    return functionSource.image;
+  }
+
+  const providerSource =
+    buildSource.type === "gitProvider"
+      ? buildSource
+      : functionSource.type === "gitProvider"
+        ? functionSource
+        : null;
+  if (
+    providerSource !== null &&
+    typeof providerSource.repositoryFullName === "string"
+  ) {
+    return providerSource.repositoryFullName;
+  }
+
+  const gitSource =
+    buildSource.type === "git"
+      ? buildSource
+      : functionSource.type === "git"
+        ? functionSource
+        : null;
+  if (gitSource !== null && typeof gitSource.repositoryUrl === "string") {
+    return gitSource.repositoryUrl;
+  }
+
+  if (
+    functionSource.type === "bundle" &&
+    typeof functionSource.artifactUri === "string"
+  ) {
+    return "Bundle artifact";
+  }
+
+  return "Not configured";
+}
+
+function parseOptionalEnv(text: string): Record<string, string> | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  const parsed = parseEnvText(text);
+  return Object.keys(parsed).length > 0 ? parsed : undefined;
+}
+
+function parseOptionalPorts(text: string): number[] | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  const ports = trimmed.split(/[,\s]+/u).map((token) => {
+    const port = Number(token);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new Error(`Invalid port: ${token}`);
+    }
+    return port;
+  });
+  return ports.length > 0 ? ports : undefined;
+}
+
+function buildGitSource(input: {
+  genericRepositoryUrl: string;
+  gitPath: string;
+  gitProviderId: string;
+  gitRef: string;
+  repositoryFullName: string;
+  repositoryId?: string | number;
+  repositoryUrl: string;
+  selectedProvider: GitProviderResponse | null;
+  sourceType: "gitProvider" | "git" | "image" | "bundle";
+}) {
+  const path = input.gitPath.trim() || undefined;
+  const ref = input.gitRef.trim() || undefined;
+
+  if (input.sourceType === "git") {
+    const repositoryUrl = input.genericRepositoryUrl.trim();
+    if (!repositoryUrl) {
+      throw new Error("Repository URL is required.");
+    }
+    return {
+      path,
+      ref,
+      repositoryUrl,
+      type: "git" as const,
+    };
+  }
+
+  if (input.sourceType !== "gitProvider") {
+    throw new Error("Git provider source is required.");
+  }
+
+  if (!input.selectedProvider || !input.gitProviderId) {
+    throw new Error("Choose a connected Git provider.");
+  }
+
+  if (!input.repositoryFullName) {
+    throw new Error("Choose a repository.");
+  }
+
+  return {
+    gitProviderId: input.gitProviderId,
+    path,
+    providerType: input.selectedProvider.providerType,
+    ref,
+    repositoryFullName: input.repositoryFullName,
+    repositoryId: input.repositoryId,
+    repositoryUrl: input.repositoryUrl || undefined,
+    type: "gitProvider" as const,
+  };
+}
+
+function ChoiceCard({
+  active,
+  icon,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={cn(
+        "flex flex-col items-start gap-1 rounded-md border p-3 text-left transition-colors",
+        active
+          ? "border-primary bg-primary/5"
+          : "border-border bg-background hover:bg-accent/50",
+      )}
+      onClick={onClick}
+      type="button"
+    >
+      <div className="flex items-center gap-2 text-sm font-medium">
+        {icon}
+        {label}
+      </div>
+    </button>
+  );
+}
+
+function SectionEyebrow({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
+      {children}
+    </p>
+  );
+}
+
+function WorkloadFact({
+  label,
+  value,
+  valueClassName,
+}: {
+  label: string;
+  value: string;
+  valueClassName?: string;
+}) {
+  return (
+    <div className="min-w-0">
+      <p className="text-muted-foreground text-xs uppercase tracking-wide">
+        {label}
+      </p>
+      <p
+        className={cn("truncate font-mono text-sm capitalize", valueClassName)}
+        title={value}
+      >
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function SourceModeTabs({
+  onChange,
+  options,
+  value,
+}: {
+  onChange: (value: string) => void;
+  options: Array<{
+    icon: React.ReactNode;
+    label: string;
+    value: string;
+  }>;
+  value: string;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map((option) => (
+        <button
+          className={cn(
+            "inline-flex items-center gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors",
+            value === option.value
+              ? "border-primary bg-primary/5 text-foreground"
+              : "border-border bg-background hover:bg-muted/50",
+          )}
+          key={option.value}
+          onClick={() => onChange(option.value)}
+          type="button"
+        >
+          {option.icon}
+          <span className="font-medium">{option.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function TextField({
+  label,
+  onChange,
+  placeholder,
+  value,
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  value: string;
+}) {
+  const id = React.useId();
+  return (
+    <div className="space-y-2">
+      <label className="text-sm font-medium" htmlFor={id}>
+        {label}
+      </label>
+      <Input
+        id={id}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        value={value}
+      />
+    </div>
+  );
+}
+
+function SelectField({
+  label,
+  onChange,
+  options,
+  value,
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  options: Array<[string, string]>;
+  value: string;
+}) {
+  const id = React.useId();
+  return (
+    <div className="space-y-2">
+      <label className="text-sm font-medium" htmlFor={id}>
+        {label}
+      </label>
+      <select
+        className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        id={id}
+        onChange={(event) => onChange(event.target.value)}
+        value={value}
+      >
+        {options.map(([optionValue, optionLabel]) => (
+          <option key={optionValue} value={optionValue}>
+            {optionLabel}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function GitSourceFields({
+  branches,
+  contextPath,
+  dockerfilePath,
+  genericRepositoryUrl,
+  gitPath,
+  gitProviderId,
+  gitRef,
+  loadingBranches,
+  loadingProviders,
+  loadingRepositories,
+  onContextPathChange,
+  onDockerfilePathChange,
+  onGenericRepositoryUrlChange,
+  onGitPathChange,
+  onGitProviderChange,
+  onGitRefChange,
+  onRepositoryChange,
+  providers,
+  repositories,
+  repositoryFullName,
+  sourceType,
+}: {
+  branches: GitBranchResponse[];
+  contextPath: string;
+  dockerfilePath: string;
+  genericRepositoryUrl: string;
+  gitPath: string;
+  gitProviderId: string;
+  gitRef: string;
+  loadingBranches: boolean;
+  loadingProviders: boolean;
+  loadingRepositories: boolean;
+  onContextPathChange: (value: string) => void;
+  onDockerfilePathChange: (value: string) => void;
+  onGenericRepositoryUrlChange: (value: string) => void;
+  onGitPathChange: (value: string) => void;
+  onGitProviderChange: (value: string) => void;
+  onGitRefChange: (value: string) => void;
+  onRepositoryChange: (repository: GitRepository) => void;
+  providers: GitProviderResponse[];
+  repositories: GitRepository[];
+  repositoryFullName: string;
+  sourceType: "gitProvider" | "git";
+}) {
+  if (sourceType === "git") {
+    return (
+      <div className="grid gap-4 rounded-md border border-border bg-muted/20 p-3">
+        <TextField
+          label="Repository URL"
+          onChange={onGenericRepositoryUrlChange}
+          placeholder="https://github.com/acme/api"
+          value={genericRepositoryUrl}
+        />
+        <GitPathAndRefFields
+          branches={[]}
+          gitPath={gitPath}
+          gitRef={gitRef}
+          loadingBranches={false}
+          onGitPathChange={onGitPathChange}
+          onGitRefChange={onGitRefChange}
+        />
+        <DockerfileFields
+          contextPath={contextPath}
+          dockerfilePath={dockerfilePath}
+          onContextPathChange={onContextPathChange}
+          onDockerfilePathChange={onDockerfilePathChange}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid gap-4 rounded-md border border-border bg-muted/20 p-3">
+      <SelectField
+        label="Git provider"
+        onChange={onGitProviderChange}
+        options={[
+          ["", loadingProviders ? "Loading providers..." : "Choose provider"],
+          ...providers.map(
+            (provider) =>
+              [provider.id, `${provider.name} (${provider.providerType})`] as [
+                string,
+                string,
+              ],
+          ),
+        ]}
+        value={gitProviderId}
+      />
+      <SelectField
+        label="Repository"
+        onChange={(next) => {
+          const repo = repositories.find((item) => item.fullName === next);
+          if (repo) onRepositoryChange(repo);
+        }}
+        options={[
+          [
+            "",
+            loadingRepositories
+              ? "Loading repositories..."
+              : "Choose repository",
+          ],
+          ...repositories.map(
+            (repository) =>
+              [repository.fullName, repository.fullName] as [string, string],
+          ),
+        ]}
+        value={repositoryFullName}
+      />
+      <GitPathAndRefFields
+        branches={branches}
+        gitPath={gitPath}
+        gitRef={gitRef}
+        loadingBranches={loadingBranches}
+        onGitPathChange={onGitPathChange}
+        onGitRefChange={onGitRefChange}
+      />
+      <DockerfileFields
+        contextPath={contextPath}
+        dockerfilePath={dockerfilePath}
+        onContextPathChange={onContextPathChange}
+        onDockerfilePathChange={onDockerfilePathChange}
+      />
+    </div>
+  );
+}
+
+function GitPathAndRefFields({
+  branches,
+  gitPath,
+  gitRef,
+  loadingBranches,
+  onGitPathChange,
+  onGitRefChange,
+}: {
+  branches: GitBranchResponse[];
+  gitPath: string;
+  gitRef: string;
+  loadingBranches: boolean;
+  onGitPathChange: (value: string) => void;
+  onGitRefChange: (value: string) => void;
+}) {
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      {branches.length > 0 ? (
+        <SelectField
+          label="Branch / ref"
+          onChange={onGitRefChange}
+          options={[
+            ["", loadingBranches ? "Loading branches..." : "Default branch"],
+            ...branches.map(
+              (branch) => [branch.name, branch.name] as [string, string],
+            ),
+          ]}
+          value={gitRef}
+        />
+      ) : (
+        <TextField
+          label="Branch / ref"
+          onChange={onGitRefChange}
+          placeholder="main"
+          value={gitRef}
+        />
+      )}
+      <TextField
+        label="Path"
+        onChange={onGitPathChange}
+        placeholder="apps/api"
+        value={gitPath}
+      />
+    </div>
+  );
+}
+
+function DockerfileFields({
+  contextPath,
+  dockerfilePath,
+  onContextPathChange,
+  onDockerfilePathChange,
+}: {
+  contextPath: string;
+  dockerfilePath: string;
+  onContextPathChange: (value: string) => void;
+  onDockerfilePathChange: (value: string) => void;
+}) {
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      <TextField
+        label="Dockerfile"
+        onChange={onDockerfilePathChange}
+        placeholder="Dockerfile"
+        value={dockerfilePath}
+      />
+      <TextField
+        label="Build context"
+        onChange={onContextPathChange}
+        placeholder="."
+        value={contextPath}
+      />
     </div>
   );
 }
@@ -3661,7 +4844,9 @@ function ProjectBranches({
       {branches.map(({ branch, database }) => {
         const card = (
           <Card
-            className={cn(linkBase !== undefined && "transition-colors hover:bg-muted/30")}
+            className={cn(
+              linkBase !== undefined && "transition-colors hover:bg-muted/30",
+            )}
           >
             <CardHeader>
               <div className="flex min-w-0 items-start justify-between gap-3">
@@ -3741,8 +4926,8 @@ export function BranchWorkspaceView({
     return (
       <Card>
         <CardContent className="text-muted-foreground py-6 text-sm">
-          Branch not found. Use the branch menu in the header breadcrumb to
-          pick another branch.
+          Branch not found. Use the branch menu in the header breadcrumb to pick
+          another branch.
         </CardContent>
       </Card>
     );

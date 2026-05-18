@@ -4,3 +4,11 @@ processes:
     command: bun run dev
     auto_start: true
     auto_restart: true
+  cf-tunnel:
+    command: >-
+      cloudflared tunnel run
+      --cred-file "${HOME}/.cloudflared/44b0ad81-c103-491d-8098-a08d72d7ba9b.json"
+      --url http://127.0.0.1:8787
+      openbika-api
+    auto_start: true
+    auto_restart: true

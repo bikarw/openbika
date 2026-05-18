@@ -317,5 +317,5 @@ export function workloadHasGitOnlySource(
     return false;
   }
   const rec = source as Record<string, unknown>;
-  return rec.type === "git";
+  return rec.type === "git" || rec.type === "gitProvider";
 }

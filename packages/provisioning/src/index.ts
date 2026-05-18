@@ -14,6 +14,7 @@ import { spawn } from "node:child_process";
 import { PassThrough, Readable } from "node:stream";
 
 import {
+  buildLocalDockerImageFromDesiredState,
   defaultLocalFunctionImageForRuntime,
   extractDockerImageFromDesiredState,
   readWorkloadPublishedPorts,
@@ -61,6 +62,7 @@ export {
 export {
   DEFAULT_LOCAL_FUNCTION_IMAGE_BUN,
   DEFAULT_LOCAL_FUNCTION_IMAGE_NODE,
+  buildLocalDockerImageFromDesiredState,
   defaultLocalFunctionImageForRuntime,
   dockerContainerNameForWorkload,
   extractDockerImageFromDesiredState,
@@ -231,7 +233,14 @@ export class LocalDataPlaneProvider implements DataPlaneProvider {
           ? (input.desiredState as Record<string, unknown>)
           : {};
 
-      const result = await runLocalDockerContainer(input.workloadId, desired, {
+      const builtImage = await buildLocalDockerImageFromDesiredState(
+        input.workloadId,
+        desired,
+      );
+      const runDesired =
+        builtImage === null ? desired : { ...desired, image: builtImage };
+
+      const result = await runLocalDockerContainer(input.workloadId, runDesired, {
         workloadKind: "container",
       });
 
@@ -266,12 +275,18 @@ export class LocalDataPlaneProvider implements DataPlaneProvider {
         };
       }
 
-      const explicitImage = extractDockerImageFromDesiredState(desired);
+      const builtImage = await buildLocalDockerImageFromDesiredState(
+        input.workloadId,
+        desired,
+      );
+      const desiredWithBuiltImage =
+        builtImage === null ? desired : { ...desired, image: builtImage };
+      const explicitImage = extractDockerImageFromDesiredState(desiredWithBuiltImage);
 
       if (explicitImage === null) {
         if (workloadHasGitOnlySource(desired)) {
           throw new Error(
-            "Local Docker provider cannot provision git-sourced functions yet. Upload a zip/tar bundle from the dashboard, or specify source.image.",
+            "Local Docker provider cannot provision git-sourced functions without Dockerfile build metadata. Configure a Dockerfile build, upload a bundle, or specify source.image.",
           );
         }
 
@@ -286,7 +301,7 @@ export class LocalDataPlaneProvider implements DataPlaneProvider {
       const existingPorts = readWorkloadPublishedPorts(desired.ports);
       const ports = existingPorts.length > 0 ? existingPorts : [9100];
       const runDesired: Record<string, unknown> = {
-        ...desired,
+        ...desiredWithBuiltImage,
         image,
         ports,
       };

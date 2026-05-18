@@ -1,4 +1,5 @@
 import { pruneBlankWorkloadEnv } from "@openbika/contracts";
+import { parse as parseDotenv } from "dotenv";
 
 function isEnvRecord(value: unknown): value is Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -23,45 +24,35 @@ export function envFromWorkloadDesiredState(
 }
 
 /**
- * Parses KEY=value lines (same semantics as workload create modal).
+ * Parses workload env text using the `dotenv` package parser.
  */
 export function parseEnvText(text: string): Record<string, string> {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return {};
+  return pruneBlankWorkloadEnv(parseDotenv(text));
+}
+
+function serializeEnvValue(value: string): string {
+  if (!/[\s#"'`\\]/u.test(value)) {
+    return value;
   }
 
-  const result: Record<string, string> = {};
-  const lines = trimmed.split(/\r?\n/u);
-
-  for (const line of lines) {
-    const stripped = line.trim();
-    if (!stripped) continue;
-
-    const equalsIndex = stripped.indexOf("=");
-    if (equalsIndex < 1) {
-      throw new Error(`Invalid env line: ${stripped}`);
-    }
-
-    const key = stripped.slice(0, equalsIndex).trim();
-    const valueTrimmed = stripped.slice(equalsIndex + 1).trim();
-    if (!key) {
-      throw new Error(`Invalid env key in: ${stripped}`);
-    }
-    if (valueTrimmed.length === 0) {
-      delete result[key];
-    } else {
-      result[key] = valueTrimmed;
-    }
+  if (value.includes('"') && !value.includes("'")) {
+    return `'${value}'`;
   }
 
-  return pruneBlankWorkloadEnv(result);
+  if (value.includes('"') && value.includes("'") && !value.includes("`")) {
+    return `\`${value}\``;
+  }
+
+  return `"${value
+    .replace(/\r/gu, "\\r")
+    .replace(/\n/gu, "\\n")
+    .replace(/\t/gu, "\\t")}"`;
 }
 
 export function serializeEnvText(env: Record<string, string>): string {
   const cleaned = pruneBlankWorkloadEnv(env);
   return Object.keys(cleaned)
     .sort((a, b) => a.localeCompare(b))
-    .map((key) => `${key}=${cleaned[key] ?? ""}`)
+    .map((key) => `${key}=${serializeEnvValue(cleaned[key] ?? "")}`)
     .join("\n");
 }

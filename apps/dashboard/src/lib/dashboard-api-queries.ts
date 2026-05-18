@@ -6,6 +6,7 @@ import type {
   CreateDatabaseRequest,
   CreateGiteaProviderRequest,
   CreateGitlabProviderRequest,
+  CreateDraftWorkloadRequest,
   PrepareGithubManifestRequest,
   CreateProjectRequest,
   CreateRestoreRequest,
@@ -16,10 +17,12 @@ import type {
   PatchGiteaProviderRequest,
   PatchGithubProviderRequest,
   PatchGitlabProviderRequest,
+  PatchWorkloadConfigRequest,
   PatchServerDomainSettingsRequest,
   PatchWorkloadEnvRequest,
   PatchWorkloadIngressDomainsRequest,
   RenameGitProviderRequest,
+  GitProviderType,
 } from "@openbika/contracts";
 import type { QueryClient } from "@tanstack/react-query";
 
@@ -175,6 +178,13 @@ export async function createWorkloadRequest(
   return getDashboardApiClient().createWorkload(projectId, input);
 }
 
+export async function createDraftWorkloadRequest(
+  projectId: string,
+  input: CreateDraftWorkloadRequest,
+) {
+  return getDashboardApiClient().createDraftWorkload(projectId, input);
+}
+
 export async function createDatabaseRequest(
   projectId: string,
   input: CreateDatabaseRequest,
@@ -191,6 +201,17 @@ export async function createBranchRequest(
 
 export async function rebuildWorkloadRequest(workloadId: string) {
   return getDashboardApiClient().rebuildWorkload(workloadId);
+}
+
+export async function deployWorkloadRequest(workloadId: string) {
+  return getDashboardApiClient().deployWorkload(workloadId);
+}
+
+export async function patchWorkloadConfigRequest(
+  workloadId: string,
+  input: PatchWorkloadConfigRequest,
+) {
+  return getDashboardApiClient().patchWorkloadConfig(workloadId, input);
 }
 
 export async function patchWorkloadEnvRequest(
@@ -270,6 +291,56 @@ export async function deleteBackupScheduleRequest(scheduleId: string) {
 
 export async function fetchGitProviders(organizationId: string) {
   return getDashboardApiClient().listGitProviders(organizationId);
+}
+
+export async function fetchGitRepositories(
+  providerType: GitProviderType,
+  gitProviderId: string,
+) {
+  const client = getDashboardApiClient();
+  switch (providerType) {
+    case "github":
+      return client.listGithubRepositories(gitProviderId);
+    case "gitlab":
+      return client.listGitlabRepositories(gitProviderId);
+    case "bitbucket":
+      return client.listBitbucketRepositories(gitProviderId);
+    case "gitea":
+      return client.listGiteaRepositories(gitProviderId);
+    default: {
+      const exhaustive: never = providerType;
+      return exhaustive;
+    }
+  }
+}
+
+export async function fetchGitBranches(input: {
+  gitProviderId: string;
+  providerType: GitProviderType;
+  repositoryFullName: string;
+  repositoryId?: string | number;
+}) {
+  const client = getDashboardApiClient();
+  const [owner, repo] = input.repositoryFullName.split("/", 2);
+
+  switch (input.providerType) {
+    case "github":
+    case "gitea":
+      if (!owner || !repo) return [];
+      return input.providerType === "github"
+        ? client.listGithubBranches(input.gitProviderId, owner, repo)
+        : client.listGiteaBranches(input.gitProviderId, owner, repo);
+    case "gitlab":
+      if (input.repositoryId === undefined) return [];
+      return client.listGitlabBranches(input.gitProviderId, String(input.repositoryId));
+    case "bitbucket":
+      if (!owner || !repo) return [];
+      return client.listBitbucketBranches(input.gitProviderId, owner, repo);
+    default: {
+      const exhaustive: never = input.providerType;
+      return exhaustive;
+    }
+  }
 }
 
 export async function renameGitProviderRequest(

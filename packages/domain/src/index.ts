@@ -118,6 +118,7 @@ export function isTerminalWorkloadStatus(status: WorkloadStatus): boolean {
     case "failed":
     case "deleted":
       return true;
+    case "draft":
     case "requested":
     case "provisioning":
     case "maintenance":

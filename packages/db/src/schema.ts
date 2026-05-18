@@ -47,9 +47,14 @@ export const jobStatus = pgEnum("job_status", [
   "cancelled",
 ]);
 
-export const workloadKind = pgEnum("workload_kind", ["container", "function"]);
+export const workloadKind = pgEnum("workload_kind", [
+  "unconfigured",
+  "container",
+  "function",
+]);
 
 export const workloadStatus = pgEnum("workload_status", [
+  "draft",
   "requested",
   "provisioning",
   "available",

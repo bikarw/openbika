@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import {
@@ -121,10 +124,7 @@ export function readWorkloadPublishedPorts(value: unknown): number[] {
   }
   return value.filter(
     (p): p is number =>
-      typeof p === "number" &&
-      Number.isInteger(p) &&
-      p >= 1 &&
-      p <= 65535,
+      typeof p === "number" && Number.isInteger(p) && p >= 1 && p <= 65535,
   );
 }
 
@@ -170,9 +170,7 @@ async function dockerHostPortForContainerPort(
 export const DEFAULT_LOCAL_FUNCTION_IMAGE_BUN = "oven/bun:1-alpine";
 export const DEFAULT_LOCAL_FUNCTION_IMAGE_NODE = "node:22-alpine";
 
-export function defaultLocalFunctionImageForRuntime(
-  runtime: unknown,
-): string {
+export function defaultLocalFunctionImageForRuntime(runtime: unknown): string {
   return runtime === "bun"
     ? DEFAULT_LOCAL_FUNCTION_IMAGE_BUN
     : DEFAULT_LOCAL_FUNCTION_IMAGE_NODE;
@@ -200,6 +198,124 @@ export function extractDockerImageFromDesiredState(
   }
 
   return null;
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function readNonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
+}
+
+async function cloneGitBuildSource(
+  source: Record<string, unknown>,
+  targetDir: string,
+): Promise<void> {
+  const repositoryUrl = readNonEmptyString(source.repositoryUrl);
+  if (repositoryUrl === null) {
+    throw new Error(
+      "Git-backed Dockerfile builds require a repository URL available to the local worker.",
+    );
+  }
+
+  const ref = readNonEmptyString(source.ref);
+  const args = ["clone", "--depth", "1"];
+  if (ref !== null) {
+    args.push("--branch", ref);
+  }
+  args.push(repositoryUrl, targetDir);
+
+  await execFile("git", args, { maxBuffer: 8 * 1024 * 1024 });
+}
+
+function localBuildContextPath(contextUri: string): string {
+  if (contextUri.startsWith("file://")) {
+    return decodeURI(contextUri.slice("file://".length));
+  }
+  return isAbsolute(contextUri)
+    ? contextUri
+    : resolve(process.cwd(), contextUri);
+}
+
+function buildContextPath(input: {
+  build: Record<string, unknown>;
+  checkoutDir: string | null;
+  source: Record<string, unknown>;
+}): string {
+  const rawContext = readNonEmptyString(input.build.contextUri) ?? ".";
+  if (input.checkoutDir === null) {
+    return localBuildContextPath(rawContext);
+  }
+
+  const sourcePath = readNonEmptyString(input.source.path);
+  const base =
+    sourcePath === null
+      ? input.checkoutDir
+      : join(input.checkoutDir, sourcePath);
+  return rawContext === "." ? base : join(base, rawContext);
+}
+
+function dockerfilePathForBuild(
+  dockerfilePath: string,
+  contextPath: string,
+): string {
+  return isAbsolute(dockerfilePath)
+    ? dockerfilePath
+    : join(contextPath, dockerfilePath);
+}
+
+export async function buildLocalDockerImageFromDesiredState(
+  workloadId: string,
+  desiredState: Record<string, unknown>,
+): Promise<string | null> {
+  if (extractDockerImageFromDesiredState(desiredState) !== null) {
+    return null;
+  }
+
+  const build = readRecord(desiredState.build);
+  if (Object.keys(build).length === 0) {
+    return null;
+  }
+
+  const source = readRecord(build.source);
+  const sourceType = source.type;
+  const usesGit = sourceType === "git" || sourceType === "gitProvider";
+  const workDir = usesGit
+    ? await mkdtemp(join(tmpdir(), `openbika-build-${workloadId}-`))
+    : null;
+  const checkoutDir = workDir === null ? null : join(workDir, "repo");
+
+  try {
+    if (usesGit && checkoutDir !== null) {
+      await cloneGitBuildSource(source, checkoutDir);
+    }
+
+    const contextPath = buildContextPath({ build, checkoutDir, source });
+    const dockerfilePath =
+      readNonEmptyString(build.dockerfilePath) ?? "Dockerfile";
+    const resolvedDockerfilePath = dockerfilePathForBuild(
+      dockerfilePath,
+      contextPath,
+    );
+    const tag = `openbika-workload-${workloadId.toLowerCase().replace(/[^a-z0-9_.-]+/g, "-")}:latest`;
+
+    await execFile(
+      "docker",
+      ["build", "-t", tag, "-f", resolvedDockerfilePath, contextPath],
+      { maxBuffer: 32 * 1024 * 1024 },
+    );
+
+    return tag;
+  } finally {
+    if (workDir !== null) {
+      await rm(workDir, { force: true, recursive: true });
+    }
+  }
 }
 
 export interface LocalDockerRunResult {
@@ -285,7 +401,9 @@ export async function runLocalDockerContainer(
     }
 
     /** User attached the same nip/platform host/path/port explicitly — omit default platform rows so we never register two routers for one Host(:80). */
-    const customsShadowPlatformIngress = customs.some(matchesPlatformAutoIngress);
+    const customsShadowPlatformIngress = customs.some(
+      matchesPlatformAutoIngress,
+    );
 
     /** When the default platform nip row stays, skip customs that duplicate it with https enabled. */
     function customRedundantWithDefaultPlatformHttps(
@@ -325,7 +443,10 @@ export async function runLocalDockerContainer(
 
     for (const d of customsForIngress) {
       const rowKey = `${punyHostname(d.hostname)}|${d.path}|${String(d.containerPort)}|${d.https ? "1" : "0"}`;
-      const suffix = createHash("sha256").update(rowKey).digest("hex").slice(0, 10);
+      const suffix = createHash("sha256")
+        .update(rowKey)
+        .digest("hex")
+        .slice(0, 10);
       labelSpecs.push({
         basename: `obl-${wlSlug}-r-${suffix}`,
         bootstrap: ingressBootstrapOutstanding,
@@ -419,11 +540,18 @@ export async function runLocalDockerContainer(
 
     const providerResourceId = `docker-${containerId.slice(0, 12)}`;
     let publicBaseUrl: string | undefined;
-    if (traefikIngress && traefikIngressRoutes && traefikIngressRoutes.length > 0) {
+    if (
+      traefikIngress &&
+      traefikIngressRoutes &&
+      traefikIngressRoutes.length > 0
+    ) {
       publicBaseUrl = traefikIngressRoutes[0]?.url;
     } else if (!traefikIngress && ports.length > 0) {
       const containerPort = ports[0]!;
-      const hostPort = await dockerHostPortForContainerPort(name, containerPort);
+      const hostPort = await dockerHostPortForContainerPort(
+        name,
+        containerPort,
+      );
       publicBaseUrl = `http://127.0.0.1:${String(hostPort)}`;
     }
 
@@ -447,12 +575,7 @@ export async function readDockerContainerLogs(
   try {
     const { stdout, stderr } = await execFile(
       "docker",
-      [
-        "logs",
-        "--timestamps",
-        `--tail=${String(safeTail)}`,
-        containerRef,
-      ],
+      ["logs", "--timestamps", `--tail=${String(safeTail)}`, containerRef],
       { maxBuffer: 10 * 1024 * 1024 },
     );
     return [stdout, stderr].filter((s) => s.trim().length > 0).join("\n");
