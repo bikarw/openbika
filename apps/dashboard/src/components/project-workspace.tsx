@@ -779,8 +779,8 @@ function ProjectWorkspaceShell({
     view === "database-detail" || view === "workload-detail";
 
   return (
-    <div className="min-h-dvh bg-background text-foreground">
-      <header className="flex h-16 min-w-0 items-center justify-between gap-4 border-border border-b px-3">
+    <div className="flex h-dvh max-h-dvh flex-col overflow-hidden bg-background text-foreground">
+      <header className="flex h-16 min-w-0 shrink-0 items-center justify-between gap-4 border-border border-b px-3">
         <div className="flex min-w-0 items-center gap-2">
           <OrgSwitcher
             disabled={pending && organizations.length === 0}
@@ -819,7 +819,7 @@ function ProjectWorkspaceShell({
         </div>
       </header>
 
-      <div className="grid h-[calc(100dvh-4rem)] min-h-0 md:grid-cols-[280px_1fr]">
+      <div className="grid min-h-0 flex-1 md:grid-cols-[280px_1fr]">
         <ProjectSidebar
           databases={databases}
           onSignOut={onSignOut}
@@ -829,7 +829,12 @@ function ProjectWorkspaceShell({
           view={view}
           workloads={workloads}
         />
-        <SidebarInset className="flex min-h-0 flex-col">
+        <SidebarInset
+          className={cn(
+            "flex min-h-0 min-w-0 flex-col",
+            dedicatedResourceInset ? "overflow-hidden" : "overflow-y-auto",
+          )}
+        >
           {dedicatedResourceInset ? (
             <WorkspaceDedicatedResourceInset
               branches={branches}
@@ -1039,7 +1044,7 @@ function WorkspaceDedicatedResourceInset({
     /\/branches\/[^/]+\/(?:sql|tables)(?:\/|$)/u.test(pathname);
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col bg-background">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
       {tabBarParams ? (
         <div className="border-border border-b px-4 pt-4 md:px-5 md:pt-5">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pb-3 text-muted-foreground text-sm">
@@ -1083,7 +1088,7 @@ function WorkspaceDedicatedResourceInset({
       <div
         className={cn(
           "flex w-full min-w-0 flex-col gap-6 px-4 py-4 md:px-5 md:py-5",
-          tabBarParams !== null && "min-h-0 flex-1",
+          tabBarParams !== null && "min-h-0 flex-1 overflow-y-auto",
           studioFullBleed &&
             "max-w-none overflow-hidden gap-2 px-2 pb-4 pt-2 md:px-3",
         )}
@@ -1520,7 +1525,7 @@ function ProjectSidebar({
   const serviceCount = databases.length + workloads.length;
 
   return (
-    <Sidebar className="min-h-0">
+    <Sidebar className="h-full min-h-0 overflow-hidden">
       <SidebarContent>
         <SidebarGroup className="space-y-3">
           <div className="px-2">

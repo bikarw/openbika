@@ -57,8 +57,8 @@ export function DashboardShell({
   }
 
   return (
-    <div className="min-h-dvh bg-background text-foreground">
-      <header className="flex h-16 min-w-0 items-center justify-between gap-4 border-border border-b px-3">
+    <div className="flex h-dvh max-h-dvh flex-col overflow-hidden bg-background text-foreground">
+      <header className="flex h-16 min-w-0 shrink-0 items-center justify-between gap-4 border-border border-b px-3">
         <div className="flex min-w-0 items-center">{orgSwitcher}</div>
 
         <div className="flex shrink-0 items-center justify-end gap-2">
@@ -81,8 +81,8 @@ export function DashboardShell({
         </div>
       </header>
 
-      <div className="grid min-h-[calc(100dvh-4rem)] md:grid-cols-[240px_1fr]">
-        <Sidebar className="min-h-0">
+      <div className="grid min-h-0 flex-1 md:grid-cols-[240px_1fr]">
+        <Sidebar className="h-full min-h-0 overflow-hidden">
           <SidebarContent>
             <SidebarGroup>
               <SidebarMenu>
@@ -139,7 +139,9 @@ export function DashboardShell({
           </SidebarFooter>
         </Sidebar>
 
-        <SidebarInset>{children}</SidebarInset>
+        <SidebarInset className="min-h-0 min-w-0 overflow-y-auto">
+          {children}
+        </SidebarInset>
       </div>
     </div>
   )
